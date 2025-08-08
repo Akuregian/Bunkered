@@ -7,6 +7,16 @@
 #include "Logging/LogMacros.h"
 #include "BunkeredCharacter.generated.h"
 
+/*
+ *
+auto* SBSS = GetWorld()->GetSubsystem<USmartBunkerSelectionSubsystem>();
+TArray<FBunkerCandidate> Top;
+SBSS->GetTopK(Owner, 3, Top);
+EnterCover(Top[DesiredIndex].Bunker, Top[DesiredIndex].SlotIndex);
+ * 
+ */
+
+class UBunkerCoverComponent;
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
@@ -92,5 +102,9 @@ public:
 
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	/* Bunker Cover Component */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Component")
+	TObjectPtr<UBunkerCoverComponent> BunkerCoverComponent;
 };
 

@@ -3,7 +3,7 @@
 
 #include "Bunkers/BunkerBase.h"
 #include "DataAsset/BunkerMetaData.h"
-#include "SmartBunkerSelectionSystem/SmartBunkerSelectionSubsystem.h"
+#include "Subsystem/SmartBunkerSelectionSubsystem.h"
 
 ABunkerBase::ABunkerBase()
 {
