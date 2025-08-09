@@ -1,5 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
+// Copyright (c) YourStudio
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,19 +8,19 @@
 class ABunkerBase;
 
 /**
- Stateless global scorer for bunker slots.
- - BuildCandidateSet() prefilters by distance & occupancy
- - GetTopK() returns best slot per bunker (global)
- - GetTopKForBunker() restricts to one bunker (used while already in cover)
- 
- Does not mutate occupancy; ABunkerBase owns claims. 
+ * Stateless global scorer for bunker slots.
+ * - BuildCandidates(): prefilters by distance/occupancy/angle
+ * - GetTopKAcrossBunkers(): best single slot per bunker (global)
+ * - GetTopKWithinBunker(): best free slots within one bunker
+ *
+ * Ownership: ABunkerBase owns claims. We never mutate occupancy here.
  */
-
 USTRUCT(BlueprintType)
 struct FBunkerCandidate
 {
 	GENERATED_BODY()
 
+	/** Owning bunker actor. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<ABunkerBase> Bunker = nullptr;
 
@@ -29,17 +28,17 @@ struct FBunkerCandidate
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	int32 SlotIndex = INDEX_NONE;
 
-	/** Straight-line distance (cm) for now. */
+	/** Straight-line distance (cm). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	float Distance = 0.f;
 
-	/** 0 if free, >0 if occupied (temporary; SmartObjects later). */
+	/** 0 if free, >0 if occupied (placeholder for future smart-object rules). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	float OccupancyPenalty = 0.f;
 
 	/** Cosine of angle between viewer forward and direction to slot ([-1,1]). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	float CosLaneAngle = 0.f;
+	float CosForwardToSlot = 0.f;
 
 	/** Final score after weighting. Higher is better. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
@@ -60,50 +59,56 @@ public:
 	virtual void Tick(float DeltaTime) override;
 	virtual TStatId GetStatId() const override { RETURN_QUICK_DECLARE_CYCLE_STAT(USmartBunkerSelectionSubsystem, STATGROUP_Tickables); }
 
-	// Registry API (called by bunkers)
+	// Registration (called by bunkers)
 	void RegisterBunker(ABunkerBase* Bunker);
 	void UnregisterBunker(ABunkerBase* Bunker);
 
 	// Query API
 	/** Build a small candidate set around Viewer (distance + occupancy prefilter + angle). */
-	UFUNCTION(BlueprintCallable, Category="SBSS")
-	void BuildCandidateSet(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidate>& OutCandidates) const;
+	UFUNCTION(BlueprintCallable, Category="Cover|Query")
+	void BuildCandidates(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidate>& OutCandidates) const;
 
-	/** Full Top-K with simple scoring (distance + angle, occupancy penalty). */
-	UFUNCTION(BlueprintCallable, Category="SBSS")
-	void GetTopK(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
+	/** Best single slot per bunker, globally sorted by score. */
+	UFUNCTION(BlueprintCallable, Category="Cover|Query")
+	void GetTopKAcrossBunkers(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
 
-	/* helper that returns the top K free slots for a specific bunker */
-	UFUNCTION(BlueprintCallable, Category="SBSS")
-	void GetTopKForBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
+	/** Top K free slots within a specific bunker. */
+	UFUNCTION(BlueprintCallable, Category="Cover|Query")
+	void GetTopKWithinBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
 
-	// Debug controls (editable in project settings via CDO if you want)
-	UPROPERTY(EditAnywhere, Category="SBSS|Debug")
+	// Debug controls (editable on CDO)
+	UPROPERTY(EditAnywhere, Category="Cover|Debug")
 	bool bDrawDebug = true;
 
-	UPROPERTY(EditAnywhere, Category="SBSS|Debug")
+	UPROPERTY(EditAnywhere, Category="Cover|Debug", meta=(ClampMin=1))
 	int32 DebugTopK = 3;
 
-	UPROPERTY(EditAnywhere, Category="SBSS|Debug")
+	UPROPERTY(EditAnywhere, Category="Cover|Debug")
 	float DebugMaxDistance = 3500.f;
 
+	UPROPERTY(EditAnywhere, Category="Cover|Query", meta=(ClampMin=1))
+	int32 PrefilterMaxCandidates = 64;
+
 	// Weights
-	UPROPERTY(EditAnywhere, Category="SBSS|Scoring")
+	UPROPERTY(EditAnywhere, Category="Cover|Scoring")
 	float W_Distance = 1.0f;
 
-	UPROPERTY(EditAnywhere, Category="SBSS|Scoring")
+	UPROPERTY(EditAnywhere, Category="Cover|Scoring")
 	float W_Angle = 0.7f;
 
-	UPROPERTY(EditAnywhere, Category="SBSS|Scoring")
+	UPROPERTY(EditAnywhere, Category="Cover|Scoring")
 	float W_Occupancy = 0.8f;
 
 private:
 	UPROPERTY()
 	TArray<TWeakObjectPtr<ABunkerBase>> Bunkers;
 
-	// Helper
-	static float Sigmoid01(float x, float k = 8.f, float c = 0.5f);
+	// Helpers
+	static FORCEINLINE float Sigmoid01(float x, float k = 8.f, float c = 0.5f)
+	{
+		const float t = 1.f / (1.f + FMath::Exp(-k * (x - c)));
+		return FMath::Clamp(t, 0.f, 1.f);
+	}
+
 	void DebugDrawTopK(APawn* ViewerPawn);
-
 };
-

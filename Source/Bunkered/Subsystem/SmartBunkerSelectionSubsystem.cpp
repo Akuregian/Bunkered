@@ -1,9 +1,8 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
-#include "Subsystem/SmartBunkerSelectionSubsystem.h"
+#include "SmartBunkerSelectionSubsystem.h"
 #include "Algo/Sort.h"
 #include "Bunkers/BunkerBase.h"
+#include "DrawDebugHelpers.h"
+#include "GameFramework/PlayerController.h"
 
 void USmartBunkerSelectionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -29,19 +28,12 @@ void USmartBunkerSelectionSubsystem::UnregisterBunker(ABunkerBase* Bunker)
 	Bunkers.Remove(TWeakObjectPtr<ABunkerBase>(Bunker));
 }
 
-float USmartBunkerSelectionSubsystem::Sigmoid01(float x, float k, float c)
-{
-	// maps x in [0,1] through a soft knee around c
-	const float t = 1.f / (1.f + FMath::Exp(-k * (x - c)));
-	return FMath::Clamp(t, 0.f, 1.f);
-}
-
 void USmartBunkerSelectionSubsystem::DebugDrawTopK(APawn* ViewerPawn)
 {
 	if (!ViewerPawn) return;
 
 	TArray<FBunkerCandidate> Top;
-	GetTopK(ViewerPawn, DebugTopK, Top);
+	GetTopKAcrossBunkers(ViewerPawn, DebugTopK, Top);
 
 	for (int32 i = 0; i < Top.Num(); ++i)
 	{
@@ -51,18 +43,15 @@ void USmartBunkerSelectionSubsystem::DebugDrawTopK(APawn* ViewerPawn)
 		const FTransform SlotXf = C.Bunker->GetSlotWorldTransform(C.SlotIndex);
 		const FVector P = SlotXf.GetLocation();
 
-		// Line to viewer
 		DrawDebugLine(GetWorld(), ViewerPawn->GetActorLocation(), P, FColor::Yellow, false, 0.f, 0, 2.f);
-		// Marker
 		DrawDebugSphere(GetWorld(), P, 18.f, 12, FColor::Yellow, false, 0.f, 0, 2.f);
-		// Text
 		const FString Txt = FString::Printf(TEXT("%s  Top[%d]  S=%.2f  d=%.0f  cosθ=%.2f  slot=%d"),
-			*C.Bunker->GetName(), i, C.Score, C.Distance, C.CosLaneAngle, C.SlotIndex);
+			*C.Bunker->GetName(), i, C.Score, C.Distance, C.CosForwardToSlot, C.SlotIndex);
 		DrawDebugString(GetWorld(), P + FVector(0,0,24.f), Txt, nullptr, FColor::Yellow, 0.f, false);
 	}
 }
 
-void USmartBunkerSelectionSubsystem::BuildCandidateSet(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidate>& OutCandidates) const
+void USmartBunkerSelectionSubsystem::BuildCandidates(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidate>& OutCandidates) const
 {
 	OutCandidates.Reset();
 	if (!Viewer) return;
@@ -70,11 +59,14 @@ void USmartBunkerSelectionSubsystem::BuildCandidateSet(const AActor* Viewer, int
 	const FVector VLoc = Viewer->GetActorLocation();
 	const FVector VFwd = Viewer->GetActorForwardVector();
 	const float MaxDistSq = DebugMaxDistance * DebugMaxDistance;
+	const int32 Budget = (MaxCandidates > 0) ? MaxCandidates : PrefilterMaxCandidates;
 
 	TArray<FBunkerCandidate> Temp;
+	Temp.Reserve(Budget);
+
 	for (const TWeakObjectPtr<ABunkerBase>& WB : Bunkers)
 	{
-		const ABunkerBase* B = WB.Get();
+		ABunkerBase* B = WB.Get();
 		if (!B) continue;
 
 		const int32 SlotCount = B->GetSlotCount();
@@ -88,44 +80,47 @@ void USmartBunkerSelectionSubsystem::BuildCandidateSet(const AActor* Viewer, int
 			if (DistSq > MaxDistSq) continue;
 
 			FBunkerCandidate C;
-			C.Bunker = const_cast<ABunkerBase*>(B);
+			C.Bunker = B;
 			C.SlotIndex = i;
 			C.Distance = FMath::Sqrt(DistSq);
 			const FVector DirTo = (P - VLoc).GetSafeNormal();
-			C.CosLaneAngle = FVector::DotProduct(VFwd, DirTo);
-			C.OccupancyPenalty = 0.f; // will be >0 once SmartObjects/teammate rules apply
+			C.CosForwardToSlot = FVector::DotProduct(VFwd, DirTo);
+			C.OccupancyPenalty = 0.f; // >0 once SmartObjects/teammate rules apply
 
 			Temp.Add(C);
 		}
 	}
 
-	// Keep at most MaxCandidates nearest (cheap prefilter).
+	// Keep nearest N (cheap prefilter)
 	Temp.Sort([](const FBunkerCandidate& A, const FBunkerCandidate& B){ return A.Distance < B.Distance; });
-	if (MaxCandidates > 0 && Temp.Num() > MaxCandidates)
+	if (Budget > 0 && Temp.Num() > Budget)
 	{
-		Temp.SetNum(MaxCandidates);
+		Temp.SetNum(Budget);
 	}
 
 	OutCandidates = MoveTemp(Temp);
 }
 
-void USmartBunkerSelectionSubsystem::GetTopK(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const
+void USmartBunkerSelectionSubsystem::GetTopKAcrossBunkers(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const
 {
 	TArray<FBunkerCandidate> Cands;
-	BuildCandidateSet(Viewer, 64, Cands);
-	if (Cands.Num() == 0 || K <= 0) { OutTopK.Reset(); return; }
+	BuildCandidates(Viewer, PrefilterMaxCandidates, Cands);
+	if (Cands.Num() == 0 || K <= 0)
+	{
+		OutTopK.Reset();
+		return;
+	}
 
-	// --- score (same as you have) ---
 	for (FBunkerCandidate& C : Cands)
 	{
 		const float NormDist = FMath::Clamp(C.Distance / FMath::Max(10.f, DebugMaxDistance), 0.f, 1.f);
 		const float DistTerm = 1.f - Sigmoid01(NormDist, 8.f, 0.45f);
-		const float AngleTerm = (C.CosLaneAngle * 0.5f) + 0.5f;
+		const float AngleTerm = (C.CosForwardToSlot * 0.5f) + 0.5f;
 		const float OccTerm = 1.f - FMath::Clamp(C.OccupancyPenalty, 0.f, 1.f);
 		C.Score = W_Distance * DistTerm + W_Angle * AngleTerm + W_Occupancy * OccTerm;
 	}
 
-	// --- keep only the best slot per bunker ---
+	// Keep only the best slot per bunker
 	TMap<ABunkerBase*, FBunkerCandidate> BestByBunker;
 	for (const FBunkerCandidate& C : Cands)
 	{
@@ -148,15 +143,11 @@ void USmartBunkerSelectionSubsystem::GetTopK(const AActor* Viewer, int32 K, TArr
 	OutTopK = MoveTemp(Best);
 }
 
-
-
-void USmartBunkerSelectionSubsystem::GetTopKForBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K,
-	TArray<FBunkerCandidate>& OutTopK) const
+void USmartBunkerSelectionSubsystem::GetTopKWithinBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidate>& OutTopK) const
 {
 	OutTopK.Reset();
 	if (!Viewer || !Bunker || K <= 0) return;
 
-	// Build candidates only from this bunker (skip occupied slots)
 	TArray<FBunkerCandidate> Cands;
 	const int32 SlotCount = Bunker->GetSlotCount();
 	const FVector VLoc = Viewer->GetActorLocation();
@@ -172,17 +163,16 @@ void USmartBunkerSelectionSubsystem::GetTopKForBunker(const AActor* Viewer, ABun
 		C.Bunker = Bunker;
 		C.SlotIndex = i;
 		C.Distance = FVector::Distance(VLoc, P);
-		C.CosLaneAngle = FVector::DotProduct(VFwd, (P - VLoc).GetSafeNormal());
+		C.CosForwardToSlot = FVector::DotProduct(VFwd, (P - VLoc).GetSafeNormal());
 		C.OccupancyPenalty = 0.f;
 		Cands.Add(C);
 	}
 
-	// Score same as global path so tuning remains centralized
 	for (FBunkerCandidate& C : Cands)
 	{
 		const float NormDist = FMath::Clamp(C.Distance / FMath::Max(10.f, DebugMaxDistance), 0.f, 1.f);
 		const float DistTerm = 1.f - Sigmoid01(NormDist, 8.f, 0.45f);
-		const float AngleTerm = (C.CosLaneAngle * 0.5f) + 0.5f;
+		const float AngleTerm = (C.CosForwardToSlot * 0.5f) + 0.5f;
 		const float OccTerm = 1.f - FMath::Clamp(C.OccupancyPenalty, 0.f, 1.f);
 		C.Score = W_Distance * DistTerm + W_Angle * AngleTerm + W_Occupancy * OccTerm;
 	}

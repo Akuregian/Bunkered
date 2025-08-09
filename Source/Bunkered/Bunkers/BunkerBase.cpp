@@ -1,8 +1,7 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "Bunkers/BunkerBase.h"
-#include "DataAsset/BunkerMetaData.h"
+#include "DrawDebugHelpers.h"
+#include "Subsystems/WorldSubsystem.h"
+#include "Engine/CollisionProfile.h"
 #include "Subsystem/SmartBunkerSelectionSubsystem.h"
 
 ABunkerBase::ABunkerBase()
@@ -24,10 +23,14 @@ bool ABunkerBase::IsSlotOccupied(int32 Index) const
 
 FTransform ABunkerBase::GetSlotWorldTransform(int32 Index) const
 {
-	if (!Slots.IsValidIndex(Index)) return GetActorTransform();
+	if (!Slots.IsValidIndex(Index))
+	{
+		return GetActorTransform();
+	}
 
 	UActorComponent* AC = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
 	const USceneComponent* Comp = Cast<USceneComponent>(AC);
+	
 	return Comp ? Comp->GetComponentTransform() : GetActorTransform();
 }
 
@@ -41,17 +44,30 @@ FVector ABunkerBase::GetSlotNormal(int32 Index) const
 	return Comp ? Comp->GetForwardVector() : GetActorForwardVector();
 }
 
-bool ABunkerBase::TryClaimSlot(int32 Index, AActor* Claimant)
+bool ABunkerBase::ClaimSlot(int32 Index, AActor* Claimant)
 {
-	if (!Slots.IsValidIndex(Index) || Slots[Index].bOccupied) return false;
-	Slots[Index].bOccupied = true;
+	if (!Slots.IsValidIndex(Index) || !Claimant) return false;
+	FBunkerCoverSlot& S = Slots[Index];
+	if (S.bOccupied && S.ClaimedBy.IsValid() && S.ClaimedBy.Get() != Claimant)
+	{
+		return false; // already held by someone else
+	}
+	S.bOccupied = true;
+	S.ClaimedBy = Claimant;
 	return true;
 }
 
-void ABunkerBase::ReleaseSlot(int32 Index, AActor* /*Claimant*/)
+void ABunkerBase::ReleaseSlot(int32 Index, AActor* Claimant)
 {
 	if (!Slots.IsValidIndex(Index)) return;
-	Slots[Index].bOccupied = false;
+	FBunkerCoverSlot& S = Slots[Index];
+	if (!S.bOccupied) return;
+	if (S.ClaimedBy.IsValid() && S.ClaimedBy.Get() != Claimant)
+	{
+		return; // ignore release attempts from others
+	}
+	S.bOccupied = false;
+	S.ClaimedBy.Reset();
 }
 
 int32 ABunkerBase::FindNearestFreeSlot(const FVector& FromLocation, float MaxDist) const
@@ -113,12 +129,12 @@ void ABunkerBase::OnConstruction(const FTransform& Transform)
 		UActorComponent* AC = Slots[i].SlotPoint.GetComponent(this); // non-const ok here
 		if (!AC)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("%s: Slot %d has no SlotPoint assigned. Will fall back to bunker origin."),
-				*GetName(), i);
+			UE_LOG(LogTemp, Warning, TEXT("%s: Slot %d has no SlotPoint assigned. Will fall back to bunker origin."), *GetName(), i);
 		}
 	}
 
-	if (bDrawDebug) { DrawDebug(); }}
+	if (bDrawDebug) { DrawDebug(); }
+}
 #endif
 
 void ABunkerBase::DrawDebug() const
@@ -140,11 +156,9 @@ void ABunkerBase::DrawDebug() const
 		const FColor C = S.bOccupied ? OccupiedColor : FreeColor;
 
 		DrawDebugLine(GetWorld(), P, P + F * 60.f, C, false, DebugDuration, 0, 2.f);
-		DrawDebugLine(GetWorld(), P, P + U * 40.f, FColor::Blue, false, DebugDuration, 0, 1.f);
+		DrawDebugLine(GetWorld(), P, P + U * 40.f, FColor::Blue, false, DebugDuration+5.0f, 0, 1.f);
 
-		const FString Label = FString::Printf(TEXT("[%d] %s (%s)"),
-			i, *S.SlotName.ToString(), S.bRightSide ? TEXT("Right") : TEXT("Left"));
+		const FString Label = FString::Printf(TEXT("[%d] %s (%s)"), i, *S.SlotName.ToString(), S.bRightSide ? TEXT("Right") : TEXT("Left"));
 		DrawDebugString(GetWorld(), P + FVector(0,0,18.f), Label, nullptr, C, DebugDuration, false);
 	}
 }
-

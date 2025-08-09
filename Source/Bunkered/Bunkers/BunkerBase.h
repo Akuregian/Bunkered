@@ -1,33 +1,27 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "SmartObjectComponent.h"
-#include "Engine/EngineTypes.h"
-#include "Components/BunkerCoverComponent.h"
 #include "BunkerBase.generated.h"
-
-class UBunkerMetaData;
-enum class ECoverStance : uint8;
-
-/*
- * Base class for all bunkers in the game
- * they should all derive from this class.
- */
 
 class USplineComponent;
 class UBoxComponent;
+class ABunkerBase; // self
 
+UENUM(BlueprintType)
+enum class ECoverStance : uint8 { Stand, Crouch, Prone };
+
+/** Designer-authored cover slot description */
 USTRUCT(BlueprintType)
-struct FBunkerCoverSlot {
+struct FBunkerCoverSlot
+{
 	GENERATED_BODY()
-	
+
 	/** Assign a child SceneComponent (e.g., ArrowComponent) in the editor to mark this slot. */
 	UPROPERTY(EditDefaultsOnly, Category="Cover Slot")
 	FComponentReference SlotPoint;
 
+	/** Desired stance for this slot. */
 	UPROPERTY(EditAnywhere, Category="Cover Slot")
 	ECoverStance SlotCoverPose = ECoverStance::Stand;
 
@@ -35,19 +29,22 @@ struct FBunkerCoverSlot {
 	UPROPERTY(EditAnywhere, Category="Cover Slot")
 	bool bRightSide = false;
 
-	/** Designer label to help you identify in the editor. */
+	/** Designer label to help identify slots in the editor. */
 	UPROPERTY(EditAnywhere, Category="Cover Slot")
 	FName SlotName = NAME_None;
 
-	/** If true, someone is occupying this slot (temporary until SmartObjects hook-up). */
+	/** If true, someone is occupying this slot (temporary fallback). */
 	UPROPERTY(VisibleAnywhere, Category="Runtime")
 	bool bOccupied = false;
 
-	/** Lateral peek offset (in cm) applied during lean checks (for future use). */
+	/** Which actor currently holds this slot (for safety checks). */
+	UPROPERTY(VisibleAnywhere, Category="Runtime")
+	TWeakObjectPtr<AActor> ClaimedBy;
+
+	/** Lateral/vertical peek hints (future). */
 	UPROPERTY(EditAnywhere, Category="Cover Slot", meta=(ClampMin="0.0", UIMin="0.0"))
 	float PeekLateral = 35.f;
 
-	/** Vertical peek offset (in cm) applied during head peeks (for future use). */
 	UPROPERTY(EditAnywhere, Category="Cover Slot", meta=(ClampMin="0.0", UIMin="0.0"))
 	float PeekVertical = 15.f;
 };
@@ -56,16 +53,15 @@ UCLASS(Blueprintable)
 class BUNKERED_API ABunkerBase : public AActor
 {
 	GENERATED_BODY()
-	
-public:	
-	// Sets default values for this actor's properties
+
+public:
 	ABunkerBase();
-	
+
 	// ---- Accessors ----
 	UFUNCTION(BlueprintCallable, Category="Bunker")
 	int32 GetSlotCount() const { return Slots.Num(); }
-	
-	// returns the Slots Default Pose ie. Stand, Crouch, Prone
+
+	UFUNCTION(BlueprintCallable, Category="Bunker")
 	ECoverStance GetSlotPose(int32 Index) const { return Slots.IsValidIndex(Index) ? Slots[Index].SlotCoverPose : ECoverStance::Stand; }
 
 	UFUNCTION(BlueprintCallable, Category="Bunker")
@@ -77,11 +73,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Bunker")
 	FVector GetSlotNormal(int32 Index) const;
 
-	/** Try to claim a slot. Returns false if invalid or already occupied. */
+	/** Try to claim a slot. Returns false if invalid or already occupied by someone else. */
 	UFUNCTION(BlueprintCallable, Category="Bunker")
-	bool TryClaimSlot(int32 Index, AActor* Claimant);
+	bool ClaimSlot(int32 Index, AActor* Claimant);
 
-	/** Release a claimed slot (no validation yet). */
+	/** Release a claimed slot. Only the current claimant can release. */
 	UFUNCTION(BlueprintCallable, Category="Bunker")
 	void ReleaseSlot(int32 Index, AActor* Claimant);
 
@@ -111,7 +107,7 @@ public:
 	UPROPERTY(EditAnywhere, Category="Debug")
 	bool bDrawDebug = true;
 
-	/** Color for free/occupied slots. */
+	/** Colors for free/occupied debug. */
 	UPROPERTY(EditAnywhere, Category="Debug")
 	FColor FreeColor = FColor::Green;
 	UPROPERTY(EditAnywhere, Category="Debug")
@@ -122,5 +118,4 @@ public:
 	float DebugDuration = 0.f;
 
 	void DrawDebug() const;
-
 };

@@ -1,72 +1,74 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "BunkerCoverComponent.generated.h"
 
+struct FBunkerCandidate;
 class UCameraComponent;
 class USpringArmComponent;
-class ABunkerBase;
+class ABunkerBase; // defined in Bunkers module
 
-/* Todo: ?????  is this necessary? what is this for ???? */
-/*ENUM: States for cover */
+/** High-level cover state */
 UENUM(BlueprintType)
 enum class ECoverState : uint8 { None, Approach, Hug, Peek };
 
-//ENUM: desired stance for the target slot (ApplyStanceForSlot(Bunker, slotIndex))
-UENUM(BlueprintType)
-enum class ECoverStance : uint8 { Stand, Crouch, Prone };
-
-/* ENUM: states for checking global bunkers or slots on the current bunker */ 
+/** Policy for choosing new slots while already in cover */
 UENUM(BlueprintType)
 enum class ECoverSelectionPolicy : uint8
 {
-	Global, // pick from all bunkers (used when not in cover)
-	SameBunkerOnly // while in cover, only traverse to other free slots on the same bunker
+	Global         UMETA(ToolTip="Pick from all bunkers"),
+	SameBunkerOnly UMETA(ToolTip="Only traverse to free slots on the same bunker")
 };
 
 UENUM(BlueprintType)
 enum class ECoverApproachMode : uint8 { Nudge, Nav };
 
-UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class BUNKERED_API UBunkerCoverComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
-public:	
-	// Sets default values for this component's properties
+public:
 	UBunkerCoverComponent();
 
-	/* EnterCover by calling SBSS directly */
+	/** Ask the global subsystem for the best nearby slot and begin approach/entry. */
 	UFUNCTION(BlueprintCallable, Category="Cover")
-	bool EnterBestCover(); 
+	bool EnterBestCover();
 
+	/** Enter a specific bunker slot (claims slot; releases old one). */
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	bool EnterCover(ABunkerBase* Bunker, int32 SlotIndex);
 
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	void ExitCover();
 
+	/** While in cover, traverse to the best free slot on this bunker. */
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	bool TraverseBestSlotOnCurrentBunker(int32 DesiredIndex = 0);
-	
+
+	/** [-1..1], negative = left. Non-zero sets state to Peek. */
 	UFUNCTION(BlueprintCallable, Category="Cover")
-	void SetLeanAxis(float Axis); // [-1..1], negative = left
+	void SetLeanAxis(float Axis);
 
 	UFUNCTION(BlueprintPure, Category="Cover")
 	bool IsInCover() const { return State != ECoverState::None; }
 
-	// WASD traversal helpers (left/right along current bunker)
-	bool FindAdjacentSlotOnCurrentBunker(int DirSign, int32& OutSlotIndex) const; // DirSign: +1 right, -1 left
+	// Quick helpers for WASD-style traversal
+	UFUNCTION(BlueprintCallable, Category="Cover") bool TraverseLeft();
+	UFUNCTION(BlueprintCallable, Category="Cover") bool TraverseRight();
 
-	// public convenience to hook to input (A/D)
-	UFUNCTION(BlueprintCallable, Category="Cover")
-	bool TraverseLeft();
+	UFUNCTION(BlueprintCallable, Category="Cover|Select")
+	bool CoverSuggestRefresh();
 
-	UFUNCTION(BlueprintCallable, Category="Cover")
-	bool TraverseRight();
+	UFUNCTION(BlueprintCallable, Category="Cover|Select")
+	bool CoverSuggestNext();   // cycles +1
+
+	UFUNCTION(BlueprintCallable, Category="Cover|Select")
+	bool CoverSuggestPrev();   // cycles -1
+
+	UFUNCTION(BlueprintCallable, Category="Cover|Select")
+	bool CoverSuggestConfirm(); // EnterCover(selected)
 
 protected:
 	virtual void BeginPlay() override;
@@ -74,129 +76,142 @@ protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTick) override;
 
 private:
-	// current occupancy
-	UPROPERTY()
-	TWeakObjectPtr<ABunkerBase> CurrentBunker;
+	// ---- Current occupancy ----
+	UPROPERTY() TWeakObjectPtr<ABunkerBase> CurrentBunker;
+	UPROPERTY() int32 CurrentSlot = INDEX_NONE;
 
-	UPROPERTY()
-	int32 CurrentSlot = INDEX_NONE;
-
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	// --- Behavior & timings ---
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning",
+			  meta=(ToolTip="When selecting a new slot while already in cover:\n• Global = consider all bunkers\n• SameBunkerOnly = only traverse to free slots on the current bunker"))
 	ECoverSelectionPolicy SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float SlotTransitionTime = 0.25f; // seconds
-
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(ClampMin="0.0", Units="s",
+			  ToolTip="Time to slide between slots on the SAME bunker once a traverse begins.\nSet small (~0.1–0.3s) for snappy feel; 0 = instant snap."))
+	float SlotTransitionTime = 0.25f;
+	
 	// Transition state
 	bool  bIsTransitioning = false;
 	float TransitionElapsed = 0.f;
-	FVector StartLoc; FRotator StartRot;
-	FVector TargetLoc; FRotator TargetRot;
-	int32  PendingSlot = INDEX_NONE;
+	FVector  StartLoc;   FRotator StartRot;
+	FVector  TargetLoc;  FRotator TargetRot;
+	int32    PendingSlot = INDEX_NONE;
 
-	void ApplyStanceForSlot(ABunkerBase* Bunker, int32 SlotIndex);	
+	// State
+	UPROPERTY() ECoverState State = ECoverState::None;
 
-	UPROPERTY()
-	ECoverState State = ECoverState::None;
-
-	// cached base pose at hug
-	FVector BaseLoc = FVector::ZeroVector;
+	// Cached base pose at Hug (lean is applied relative to this)
+	FVector  BaseLoc = FVector::ZeroVector;
 	FRotator BaseRot = FRotator::ZeroRotator;
 
-	// lean state
+	// Lean
 	float DesiredLeanAxis = 0.f;
-	float CurrentLean = 0.f;
+	float CurrentLean     = 0.f;
 
-	// ------------ Cover|Tuning ----------------
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float FloorSnapUp = 50.f;        // cm above target to start the trace
+	// ------------ Cover | Tuning ----------------
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="How far ABOVE the computed hug point to start the floor trace.\nKeeps the trace from starting inside uneven ground."))
+	float FloorSnapUp = 50.f;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float FloorSnapDown = 150.f;     // cm below target to search for ground
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="How far BELOW the computed hug point to search for ground.\nIncrease on tall props or steep terrain."))
+	float FloorSnapDown = 150.f;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float FloorSnapPadding = 1.5f;   // tiny lift to avoid resting penetration
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Extra Z we add on top of the detected floor to avoid z-fighting and micro-penetration.\nUsually 0.5–2 cm."))
+	float FloorSnapPadding = 1.5f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="How far to pull the capsule BACK from the slot normal when hugging the bunker.\nPrevents the capsule from intersecting the wall. Roughly <= capsule radius."))
+	float CoverBackOffset = 30.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Minimum spring-arm probe size while in cover.\nLarger values reduce camera clipping but make the camera push in sooner near tight walls."))
+	float CameraWallClearance = 12.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Maximum sideways offset applied when leaning (A/D).\nControls how far the body shifts laterally from the hug anchor."))
+	float LeanLateral = 28.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Maximum vertical rise applied during a lean (small head pop on tall bunkers)."))
+	float LeanVertical = 8.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(ClampMin="0.0",
+			  ToolTip="How quickly the current lean interpolates toward the input axis per second.\nHigher = snappier lean response."))
+	float LeanSpeed = 10.f;
+	// --------------------------------------------	// --------------------------------------------
+
+	// Camera / spring arm
+	UPROPERTY() USpringArmComponent* CachedBoom   = nullptr;
+	UPROPERTY() UCameraComponent*    CachedCamera = nullptr;
+
+	// ---- Camera / spring arm (cover view) ----
+	UPROPERTY(EditAnywhere, Category="Cover|Camera", meta=(Units="cm",
+			  ToolTip="Horizontal camera offset from the actor, to the exposed shoulder (derived from slot normal).\nBigger = more over-the-shoulder; smaller = tighter, less obstruction."))
+	float CoverShoulderOffset = 55.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera", meta=(Units="cm",
+			  ToolTip="Spring-arm length while in cover. Shorter reduces wall pushing but zooms the camera in."))
+	float ArmLengthCover = 260.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera",
+			  meta=(ToolTip="Default camera shoulder while in cover.\nTrue = right shoulder; False = left shoulder. Can be toggled at runtime."))
+	bool bRightShoulder = true;
 	
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float CoverBackOffset = 30.f; // cm back from slot normal
-	
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float CameraWallClearance = 12.f; // Camera offset from the bunker (TEST)
-
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float LeanLateral = 28.f; // cm side max
-
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float LeanVertical = 8.f; // cm up max
-
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float LeanSpeed = 10.f; // interp speed
-	// -----------------------------------------------
-
-	/* -------- Camera/SpringArmComponent ---------- */
-	UPROPERTY()
-	USpringArmComponent* CachedBoom = nullptr;
-	
-	UPROPERTY()
-	UCameraComponent* CachedCamera = nullptr;
-	// Shoulder/camera tuning
-	UPROPERTY(EditAnywhere, Category="Cover|Camera")
-	float CoverShoulderOffset = 55.f;   // cm to the exposed side
-
-	UPROPERTY(EditAnywhere, Category="Cover|Camera")
-	float CameraHeight   = 70.f;   // cm above pelvis
-
-	UPROPERTY(EditAnywhere, Category="Cover|Camera")
-	float ArmLengthCover = 260.f;  // spring arm length while in cover
-
-	UPROPERTY(EditAnywhere, Category="Cover|Camera")
-	float CameraInterp   = 10.f;   // camera smoothing rate
-
-	UPROPERTY(EditAnywhere, Category="Cover|Camera")
-	bool bRightShoulder  = true;   // toggle via input later
-
-	// cached values to restore on ExitCover
+	// Cached values to restore on ExitCover
 	FVector SavedSocketOffset = FVector::ZeroVector;
-	float   SavedArmLength = 0.f;
+	float   SavedArmLength    = 0.f;
 	bool    bSavedDoCollisionTest = true;
 
-	// helpers
-	void CacheCamera();
-	bool ComputeHugTransform(const FTransform& SlotXf, const FVector& Normal, FVector& OutLoc, FRotator& OutRot) const;
-	void PlaceAtHugTransform(const FVector& Loc, const FRotator& Rot);
-	/** Pick initial shoulder (L/R) from player view when we enter cover */
-	void SetInitialShoulderFromView(const FVector& SlotNormal);
-	/** Make camera face the bunker direction right away */
-	void AlignControllerYawTo(const FRotator& FaceRot);
-	/*-----------------------------------------------*/
-	
-	bool ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const;
-	void ApplyHugPose(const FTransform& SlotXf, const FVector& Normal);
-	void ApplyLean(float DeltaTime, const FTransform& SlotXf, const FVector& Normal);
+	// ---- Approach (pre-hug) -------------------
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Stop distance for the pre-hug nudge phase.\nWhen approaching a slot, we stop this far from the target before snapping into the hug pose."))
+	float ApproachStopDistance = 35.f;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float ApproachStopDistance = 35.f;   // how close (cm) before we snap to hug
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm",
+			  ToolTip="Max distance within which we use a simple XY nudge instead of requesting a full nav move.\nKeeps short approaches snappy."))
+	float ApproachNudgeMaxDistance = 450.f;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float ApproachNudgeMaxDistance = 450.f;   // if closer than this and LOS is clear, nudge
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(ClampMin="0.0",
+			  ToolTip="Multiplier applied to movement during the pre-hug approach when we nudge.\n1.0 uses current walk speed; lower slows the approach."))
+	float ApproachMoveSpeed = 1.0f;
 
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float ApproachMoveSpeed = 1.0f;      // scalar for AddMovementInput while approaching
-
-	/** Walk speed while approaching (nav or nudge) */
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm/s",
+			  ToolTip="Temporary CharacterMovement MaxWalkSpeed while approaching cover (saved and restored when finished)."))
 	float ApproachWalkSpeed = 220.f;
 
-	/** Ease the last few centimeters instead of popping */
-	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="s",
+			  ToolTip="Blend time for the final snap from approach position to the exact hug transform.\nTiny values feel crisp; larger values feel more animated."))
 	float EntrySnapBlendTime = 0.18f;
-	
-	ECoverApproachMode ActiveApproachMode = ECoverApproachMode::Nudge;
 
-	// cached approach target
-	FVector ApproachLoc = FVector::ZeroVector;
-	FRotator ApproachRot = FRotator::ZeroRotator;
+	// ---- Suggest / selection ------------------
+	UPROPERTY(Transient) TArray<FBunkerCandidate> Suggested;
+	int32 SuggestedIndex = INDEX_NONE;
 	
-	// restore movement speed after approach
-	float SavedMaxWalkSpeed = 0.f;
+	UPROPERTY(EditAnywhere, Category="Cover|Select",
+			  meta=(ClampMin="1", ClampMax="5",
+			  ToolTip="How many bunker suggestions to keep from SBSS for cycling/selecting.\nKeep small (2–3) for clarity and performance."))
+	int32 SuggestTopK = 3;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Select",
+			  meta=(ClampMin="0.0", ClampMax="1.0",
+			  ToolTip="View-cone gate for suggestions. Slots must lie within this cosine angle of the camera forward.\n0.25 ≈ 75°, 0.5 ≈ 60°, 0.87 ≈ 30°."))
+	float SuggestMinCosToView = 0.25f;
+
+	ECoverApproachMode ApproachMode = ECoverApproachMode::Nudge;
+	FVector  ApproachLoc = FVector::ZeroVector;
+	FRotator ApproachRot = FRotator::ZeroRotator;
+	float    SavedMaxWalkSpeed = 0.f;
+
+	// ---- Helpers ----
+	void   CacheCamera();
+	void   ApplyStanceForSlot(ABunkerBase* Bunker, int32 SlotIndex);
+	bool   ComputeHugTransform(const FTransform& SlotXf, const FVector& Normal, FVector& OutLoc, FRotator& OutRot) const;
+	void   PlaceAtHugTransform(const FVector& Loc, const FRotator& Rot);
+	void   SetInitialShoulderFromView(const FVector& SlotNormal);
+	void   AlignControllerYawTo(const FRotator& FaceRot);
+	bool   ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const;
+	void   ApplyHugPose(const FTransform& SlotXf, const FVector& Normal);
+	void   ApplyLean(float DeltaTime, const FTransform& SlotXf, const FVector& Normal);
+	bool   FindAdjacentFreeSlotOnCurrentBunker(int DirSign, int32& OutSlotIndex) const; // DirSign: -1=left, +1=right
 };
