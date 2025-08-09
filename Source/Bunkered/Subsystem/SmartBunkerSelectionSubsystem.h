@@ -9,7 +9,12 @@
 class ABunkerBase;
 
 /**
- * 
+ Stateless global scorer for bunker slots.
+ - BuildCandidateSet() prefilters by distance & occupancy
+ - GetTopK() returns best slot per bunker (global)
+ - GetTopKForBunker() restricts to one bunker (used while already in cover)
+ 
+ Does not mutate occupancy; ABunkerBase owns claims. 
  */
 
 USTRUCT(BlueprintType)
@@ -68,6 +73,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SBSS")
 	void GetTopK(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
 
+	/* helper that returns the top K free slots for a specific bunker */
+	UFUNCTION(BlueprintCallable, Category="SBSS")
+	void GetTopKForBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
+
 	// Debug controls (editable in project settings via CDO if you want)
 	UPROPERTY(EditAnywhere, Category="SBSS|Debug")
 	bool bDrawDebug = true;
@@ -97,3 +106,4 @@ private:
 	void DebugDrawTopK(APawn* ViewerPawn);
 
 };
+

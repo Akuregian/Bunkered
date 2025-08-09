@@ -24,15 +24,21 @@ bool ABunkerBase::IsSlotOccupied(int32 Index) const
 
 FTransform ABunkerBase::GetSlotWorldTransform(int32 Index) const
 {
-	if (!Slots.IsValidIndex(Index) || !Slots[Index].SlotPoint) return GetActorTransform();
-	return Slots[Index].SlotPoint->GetComponentTransform();
+	if (!Slots.IsValidIndex(Index)) return GetActorTransform();
+
+	UActorComponent* AC = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
+	const USceneComponent* Comp = Cast<USceneComponent>(AC);
+	return Comp ? Comp->GetComponentTransform() : GetActorTransform();
 }
 
 FVector ABunkerBase::GetSlotNormal(int32 Index) const
 {
-	// Use the SlotPoint's forward vector as the "normal" (designer should orient arrows away from bunker)
-	if (!Slots.IsValidIndex(Index) || !Slots[Index].SlotPoint) return GetActorForwardVector();
-	return Slots[Index].SlotPoint->GetForwardVector();
+	if (!Slots.IsValidIndex(Index)) return GetActorForwardVector();
+
+	UActorComponent* AC = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
+	const USceneComponent* Comp = Cast<USceneComponent>(AC);
+	// Designer orients Arrow X (Forward) outward from cover
+	return Comp ? Comp->GetForwardVector() : GetActorForwardVector();
 }
 
 bool ABunkerBase::TryClaimSlot(int32 Index, AActor* Claimant)
@@ -56,9 +62,13 @@ int32 ABunkerBase::FindNearestFreeSlot(const FVector& FromLocation, float MaxDis
 	for (int32 i = 0; i < Slots.Num(); ++i)
 	{
 		const FBunkerCoverSlot& S = Slots[i];
-		if (!S.SlotPoint || S.bOccupied) continue;
+		if (S.bOccupied) continue;
 
-		const float DistSq = FVector::DistSquared(FromLocation, S.SlotPoint->GetComponentLocation());
+		UActorComponent* AC = S.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
+		const USceneComponent* Comp = Cast<USceneComponent>(AC);
+		if (!Comp) continue;
+
+		const float DistSq = FVector::DistSquared(FromLocation, Comp->GetComponentLocation());
 		if (DistSq < BestDistSq)
 		{
 			BestDistSq = DistSq;
@@ -97,8 +107,18 @@ void ABunkerBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void ABunkerBase::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
-	if (bDrawDebug) { DrawDebug(); }
-}
+
+	for (int32 i = 0; i < Slots.Num(); ++i)
+	{
+		UActorComponent* AC = Slots[i].SlotPoint.GetComponent(this); // non-const ok here
+		if (!AC)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("%s: Slot %d has no SlotPoint assigned. Will fall back to bunker origin."),
+				*GetName(), i);
+		}
+	}
+
+	if (bDrawDebug) { DrawDebug(); }}
 #endif
 
 void ABunkerBase::DrawDebug() const
@@ -108,24 +128,22 @@ void ABunkerBase::DrawDebug() const
 	for (int32 i = 0; i < Slots.Num(); ++i)
 	{
 		const FBunkerCoverSlot& S = Slots[i];
-		if (!S.SlotPoint) continue;
 
-		const FVector P = S.SlotPoint->GetComponentLocation();
-		const FVector F = S.SlotPoint->GetForwardVector();
-		const FVector U = S.SlotPoint->GetUpVector();
+		UActorComponent* AC = S.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
+		const USceneComponent* Comp = Cast<USceneComponent>(AC);
+		if (!Comp) continue;
+
+		const FVector P = Comp->GetComponentLocation();
+		const FVector F = Comp->GetForwardVector();
+		const FVector U = Comp->GetUpVector();
 
 		const FColor C = S.bOccupied ? OccupiedColor : FreeColor;
 
-		// Axis
 		DrawDebugLine(GetWorld(), P, P + F * 60.f, C, false, DebugDuration, 0, 2.f);
 		DrawDebugLine(GetWorld(), P, P + U * 40.f, FColor::Blue, false, DebugDuration, 0, 1.f);
 
-		// Label
 		const FString Label = FString::Printf(TEXT("[%d] %s (%s)"),
-			i,
-			*S.SlotName.ToString(),
-			S.bRightSide ? TEXT("Right") : TEXT("Left"));
-
+			i, *S.SlotName.ToString(), S.bRightSide ? TEXT("Right") : TEXT("Left"));
 		DrawDebugString(GetWorld(), P + FVector(0,0,18.f), Label, nullptr, C, DebugDuration, false);
 	}
 }

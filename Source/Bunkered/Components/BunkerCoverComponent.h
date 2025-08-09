@@ -6,10 +6,26 @@
 #include "Components/ActorComponent.h"
 #include "BunkerCoverComponent.generated.h"
 
+class UCameraComponent;
+class USpringArmComponent;
 class ABunkerBase;
 
+/* Todo: ?????  is this necessary? what is this for ???? */
+/*ENUM: States for cover */
 UENUM(BlueprintType)
 enum class ECoverState : uint8 { None, Hug, Peek };
+
+//ENUM: desired stance for the target slot (ApplyStanceForSlot(Bunker, slotIndex))
+UENUM(BlueprintType)
+enum class ECoverStance : uint8 { Stand, Crouch, Prone };
+
+/* ENUM: states for checking global bunkers or slots on the current bunker */ 
+UENUM(BlueprintType)
+enum class ECoverSelectionPolicy : uint8
+{
+	Global, // pick from all bunkers (used when not in cover)
+	SameBunkerOnly // while in cover, only traverse to other free slots on the same bunker
+};
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class BUNKERED_API UBunkerCoverComponent : public UActorComponent
@@ -20,8 +36,9 @@ public:
 	// Sets default values for this component's properties
 	UBunkerCoverComponent();
 
+	/* EnterCover by calling SBSS directly */
 	UFUNCTION(BlueprintCallable, Category="Cover")
-	bool EnterCoverFromSBSS(int32 DesiredIndex = 0); // 0 = best pick
+	bool EnterBestCover(); 
 
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	bool EnterCover(ABunkerBase* Bunker, int32 SlotIndex);
@@ -29,6 +46,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	void ExitCover();
 
+	UFUNCTION(BlueprintCallable, Category="Cover")
+	bool TraverseBestSlotOnCurrentBunker(int32 DesiredIndex = 0);
+	
 	UFUNCTION(BlueprintCallable, Category="Cover")
 	void SetLeanAxis(float Axis); // [-1..1], negative = left
 
@@ -48,6 +68,21 @@ private:
 	UPROPERTY()
 	int32 CurrentSlot = INDEX_NONE;
 
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	ECoverSelectionPolicy SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float SlotTransitionTime = 0.25f; // seconds
+
+	// Transition state
+	bool  bIsTransitioning = false;
+	float TransitionElapsed = 0.f;
+	FVector StartLoc; FRotator StartRot;
+	FVector TargetLoc; FRotator TargetRot;
+	int32  PendingSlot = INDEX_NONE;
+
+	void ApplyStanceForSlot(ABunkerBase* Bunker, int32 SlotIndex);	
+
 	UPROPERTY()
 	ECoverState State = ECoverState::None;
 
@@ -56,12 +91,24 @@ private:
 	FRotator BaseRot = FRotator::ZeroRotator;
 
 	// lean state
-	float LeanAxis = 0.f;
+	float DesiredLeanAxis = 0.f;
 	float CurrentLean = 0.f;
 
-	// tuning
+	// ------------ Cover|Tuning ----------------
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
-	float HugBackOffset = 30.f; // cm back from slot normal
+	float FloorSnapUp = 50.f;        // cm above target to start the trace
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float FloorSnapDown = 150.f;     // cm below target to search for ground
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float FloorSnapPadding = 1.5f;   // tiny lift to avoid resting penetration
+	
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float CoverBackOffset = 30.f; // cm back from slot normal
+	
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float CameraWallClearance = 12.f; // Camera offset from the bunker (TEST)
 
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
 	float LeanLateral = 28.f; // cm side max
@@ -71,7 +118,41 @@ private:
 
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
 	float LeanSpeed = 10.f; // interp speed
+	// -----------------------------------------------
 
+	/* -------- Camera/SpringArmComponent ---------- */
+	UPROPERTY()
+	USpringArmComponent* CachedBoom = nullptr;
+	
+	UPROPERTY()
+	UCameraComponent* CachedCamera = nullptr;
+	// Shoulder/camera tuning
+	UPROPERTY(EditAnywhere, Category="Cover|Camera")
+	float CoverShoulderOffset = 55.f;   // cm to the exposed side
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera")
+	float CameraHeight   = 70.f;   // cm above pelvis
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera")
+	float ArmLengthCover = 260.f;  // spring arm length while in cover
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera")
+	float CameraInterp   = 10.f;   // camera smoothing rate
+
+	UPROPERTY(EditAnywhere, Category="Cover|Camera")
+	bool bRightShoulder  = true;   // toggle via input later
+
+	// cached values to restore on ExitCover
+	FVector SavedSocketOffset = FVector::ZeroVector;
+	float   SavedArmLength = 0.f;
+	bool    bSavedDoCollisionTest = true;
+
+	// helpers
+	void CacheCamera();
+	bool ComputeHugTransform(const FTransform& SlotXf, const FVector& Normal, FVector& OutLoc, FRotator& OutRot) const;
+	void PlaceAtHugTransform(const FVector& Loc, const FRotator& Rot);
+	/*-----------------------------------------------*/
+	
 	bool ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const;
 	void ApplyHugPose(const FTransform& SlotXf, const FVector& Normal);
 	void ApplyLean(float DeltaTime, const FTransform& SlotXf, const FVector& Normal);

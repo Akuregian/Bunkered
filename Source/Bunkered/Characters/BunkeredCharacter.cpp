@@ -25,11 +25,13 @@ ABunkeredCharacter::ABunkeredCharacter()
 	bUseControllerRotationRoll = false;
 
 	// Configure character movement
+	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
 	GetCharacterMovement()->bOrientRotationToMovement = true;
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
 
 	// Note: For faster iteration times these variables, and many more, can be tweaked in the Character Blueprint
 	// instead of recompiling to adjust them
+	GetCharacterMovement()->CrouchedHalfHeight = 44.f; // crouched height
 	GetCharacterMovement()->JumpZVelocity = 500.f;
 	GetCharacterMovement()->AirControl = 0.35f;
 	GetCharacterMovement()->MaxWalkSpeed = 500.f;
@@ -69,6 +71,9 @@ void ABunkeredCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABunkeredCharacter::Look);
+
+		// Crouch
+		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Triggered, this, &ABunkeredCharacter::DoCrouchToggle);
 	}
 	else
 	{
@@ -92,6 +97,20 @@ void ABunkeredCharacter::Look(const FInputActionValue& Value)
 
 	// route the input
 	DoLook(LookAxisVector.X, LookAxisVector.Y);
+}
+
+void ABunkeredCharacter::DoCrouchToggle()
+{
+	if (GetCharacterMovement()->IsCrouching())
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("Un-Crouching"));
+		UnCrouch();
+	}
+	else
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("Crouching"));
+		Crouch();
+	}
 }
 
 void ABunkeredCharacter::DoMove(float Right, float Forward)

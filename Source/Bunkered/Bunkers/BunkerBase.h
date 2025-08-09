@@ -5,9 +5,12 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "SmartObjectComponent.h"
+#include "Engine/EngineTypes.h"
+#include "Components/BunkerCoverComponent.h"
 #include "BunkerBase.generated.h"
 
 class UBunkerMetaData;
+enum class ECoverStance : uint8;
 
 /*
  * Base class for all bunkers in the game
@@ -20,9 +23,13 @@ class UBoxComponent;
 USTRUCT(BlueprintType)
 struct FBunkerCoverSlot {
 	GENERATED_BODY()
+	
 	/** Assign a child SceneComponent (e.g., ArrowComponent) in the editor to mark this slot. */
-	UPROPERTY(EditInstanceOnly, Category="Cover Slot")
-	TObjectPtr<USceneComponent> SlotPoint = nullptr;
+	UPROPERTY(EditDefaultsOnly, Category="Cover Slot")
+	FComponentReference SlotPoint;
+
+	UPROPERTY(EditAnywhere, Category="Cover Slot")
+	ECoverStance SlotCoverPose = ECoverStance::Stand;
 
 	/** Right-side or left-side orientation (designer semantics only). */
 	UPROPERTY(EditAnywhere, Category="Cover Slot")
@@ -57,6 +64,9 @@ public:
 	// ---- Accessors ----
 	UFUNCTION(BlueprintCallable, Category="Bunker")
 	int32 GetSlotCount() const { return Slots.Num(); }
+	
+	// returns the Slots Default Pose ie. Stand, Crouch, Prone
+	ECoverStance GetSlotPose(int32 Index) const { return Slots.IsValidIndex(Index) ? Slots[Index].SlotCoverPose : ECoverStance::Stand; }
 
 	UFUNCTION(BlueprintCallable, Category="Bunker")
 	bool IsSlotOccupied(int32 Index) const;
