@@ -115,6 +115,16 @@ void ABunkeredCharacter::DoCrouchToggle()
 
 void ABunkeredCharacter::DoMove(float Right, float Forward)
 {
+	/* If we are in cover, traverse Left or Right */
+	if (BunkerCoverComponent && BunkerCoverComponent->IsInCover())
+	{
+		// deadzone to avoid spam
+		if (Right > 0.6f) { BunkerCoverComponent->TraverseRight(); return; }
+		if (Right < -0.6f){ BunkerCoverComponent->TraverseLeft();  return; }
+		// Optional: allow a little forward/back to lean peek later
+		return; // swallow standard movement while in cover
+	}
+	
 	if (GetController() != nullptr)
 	{
 		// find out which way is forward

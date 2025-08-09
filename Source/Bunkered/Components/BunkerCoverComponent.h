@@ -13,7 +13,7 @@ class ABunkerBase;
 /* Todo: ?????  is this necessary? what is this for ???? */
 /*ENUM: States for cover */
 UENUM(BlueprintType)
-enum class ECoverState : uint8 { None, Hug, Peek };
+enum class ECoverState : uint8 { None, Approach, Hug, Peek };
 
 //ENUM: desired stance for the target slot (ApplyStanceForSlot(Bunker, slotIndex))
 UENUM(BlueprintType)
@@ -26,6 +26,9 @@ enum class ECoverSelectionPolicy : uint8
 	Global, // pick from all bunkers (used when not in cover)
 	SameBunkerOnly // while in cover, only traverse to other free slots on the same bunker
 };
+
+UENUM(BlueprintType)
+enum class ECoverApproachMode : uint8 { Nudge, Nav };
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class BUNKERED_API UBunkerCoverComponent : public UActorComponent
@@ -54,6 +57,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Cover")
 	bool IsInCover() const { return State != ECoverState::None; }
+
+	// WASD traversal helpers (left/right along current bunker)
+	bool FindAdjacentSlotOnCurrentBunker(int DirSign, int32& OutSlotIndex) const; // DirSign: +1 right, -1 left
+
+	// public convenience to hook to input (A/D)
+	UFUNCTION(BlueprintCallable, Category="Cover")
+	bool TraverseLeft();
+
+	UFUNCTION(BlueprintCallable, Category="Cover")
+	bool TraverseRight();
 
 protected:
 	virtual void BeginPlay() override;
@@ -151,9 +164,39 @@ private:
 	void CacheCamera();
 	bool ComputeHugTransform(const FTransform& SlotXf, const FVector& Normal, FVector& OutLoc, FRotator& OutRot) const;
 	void PlaceAtHugTransform(const FVector& Loc, const FRotator& Rot);
+	/** Pick initial shoulder (L/R) from player view when we enter cover */
+	void SetInitialShoulderFromView(const FVector& SlotNormal);
+	/** Make camera face the bunker direction right away */
+	void AlignControllerYawTo(const FRotator& FaceRot);
 	/*-----------------------------------------------*/
 	
 	bool ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const;
 	void ApplyHugPose(const FTransform& SlotXf, const FVector& Normal);
 	void ApplyLean(float DeltaTime, const FTransform& SlotXf, const FVector& Normal);
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float ApproachStopDistance = 35.f;   // how close (cm) before we snap to hug
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float ApproachNudgeMaxDistance = 450.f;   // if closer than this and LOS is clear, nudge
+
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float ApproachMoveSpeed = 1.0f;      // scalar for AddMovementInput while approaching
+
+	/** Walk speed while approaching (nav or nudge) */
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float ApproachWalkSpeed = 220.f;
+
+	/** Ease the last few centimeters instead of popping */
+	UPROPERTY(EditAnywhere, Category="Cover|Tuning")
+	float EntrySnapBlendTime = 0.18f;
+	
+	ECoverApproachMode ActiveApproachMode = ECoverApproachMode::Nudge;
+
+	// cached approach target
+	FVector ApproachLoc = FVector::ZeroVector;
+	FRotator ApproachRot = FRotator::ZeroRotator;
+	
+	// restore movement speed after approach
+	float SavedMaxWalkSpeed = 0.f;
 };

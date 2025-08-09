@@ -9,6 +9,9 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Subsystem/SmartBunkerSelectionSubsystem.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Blueprint/AIBlueprintHelperLibrary.h" // .Build.cs: AIModule
 
 UBunkerCoverComponent::UBunkerCoverComponent()
 {
@@ -93,32 +96,32 @@ bool UBunkerCoverComponent::ComputeHugTransform(const FTransform& SlotXf, const 
     const float  SafeBack    = CoverBackOffset + Radius * 0.6f + CameraWallClearance;
     const FVector Anchor     = SlotXf.GetLocation();
     const FVector PreLoc     = Anchor - SafeBackDir * SafeBack;
-    const FRotator FaceRot   = (-SafeBackDir).Rotation();
+    const FRotator FaceRot   = (SafeBackDir).Rotation();
 
-    // 2) Vertical placement: snap to walkable floor
+    // 2) Vertical placement: snap by capsule sweep (more reliable than a thin ray)
     UWorld* World = GetWorld();
-    if (!World) { OutLoc = PreLoc; OutRot = FaceRot; return true; }
-
-    const FVector Start = PreLoc + FVector::UpVector * FloorSnapUp;
-    const FVector End   = PreLoc - FVector::UpVector * FloorSnapDown;
+    if (!World)
+    {
+        OutLoc = PreLoc;
+        OutRot = FaceRot;
+        return true;
+    }
 
     FHitResult Hit;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverFloorSnap), false, GetOwner());
-    const bool bHit = World->LineTraceSingleByChannel(
-        Hit, Start, End, ECC_Visibility, Params
-    );
+    const FVector Start = PreLoc + FVector::UpVector * FloorSnapUp;
+    const FVector End = PreLoc - FVector::UpVector * FloorSnapDown;
+    const FCollisionShape Capsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
 
-    if (bHit)
-    {
-        // Put capsule bottom on the floor, plus a tiny padding
-        OutLoc = Hit.Location + FVector::UpVector * (HalfHeight + FloorSnapPadding);
-    }
-    else
-    {
-        // No floor? Fall back to precomputed Z (should rarely happen)
-        OutLoc = PreLoc;
-    }
-
+    // Ground may be static or movable; include both so we don't miss and float
+    FCollisionObjectQueryParams ObjMask;
+    ObjMask.AddObjectTypesToQuery(ECC_WorldStatic);
+    ObjMask.AddObjectTypesToQuery(ECC_WorldDynamic);
+    const bool bHit = World->SweepSingleByObjectType(
+        Hit, Start, End, FQuat::Identity, ObjMask, Capsule, Params);
+    
+    OutLoc = bHit ? Hit.Location + FVector::UpVector * (HalfHeight + FloorSnapPadding) : PreLoc; // rare fallback
+    
     OutRot = FaceRot;
     return true;
 }
@@ -141,12 +144,51 @@ void UBunkerCoverComponent::PlaceAtHugTransform(const FVector& Loc, const FRotat
 
     BaseLoc = Loc;
     BaseRot = Rot;
+
+    // keep camera/controller aligned to our new facing
+    AlignControllerYawTo(Rot);
 }
 
-bool UBunkerCoverComponent::ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const
+void UBunkerCoverComponent::SetInitialShoulderFromView(const FVector& SlotNormal)
 {
-    if (!CurrentBunker.IsValid() || CurrentSlot == INDEX_NONE) return false;
-    OutXf = CurrentBunker->GetSlotWorldTransform(CurrentSlot);
+        if (!CachedBoom) return;
+    
+        const FVector Up = FVector::UpVector;
+        const FVector SlotRight = FVector::CrossProduct(Up, SlotNormal).GetSafeNormal();
+
+        FRotator ViewRot = FRotator::ZeroRotator;
+        if (APawn* P = Cast<APawn>(GetOwner()))
+        {
+            if (AController* C = P->GetController())
+            {
+                ViewRot = C->GetControlRotation();
+            }
+            else
+            {
+                ViewRot = P->GetActorRotation();
+            }
+        }
+    
+        const FVector ViewRight = FRotationMatrix(ViewRot).GetUnitAxis(EAxis::Y);
+        const float SideSign = (FVector::DotProduct(ViewRight, SlotRight) >= 0.f) ? +1.f : -1.f;
+        CachedBoom->SocketOffset = FVector(0.f, SideSign * CoverShoulderOffset, 0.f);
+}
+
+void UBunkerCoverComponent::AlignControllerYawTo(const FRotator& FaceRot)
+{
+    if (APawn* P = Cast<APawn>(GetOwner()))
+    {
+        if (AController* C = P->GetController())
+        {
+            FRotator NewCtrl = C->GetControlRotation();
+            NewCtrl.Yaw = FaceRot.Yaw;
+            C->SetControlRotation(NewCtrl);
+        }
+    }
+}
+
+bool UBunkerCoverComponent::ResolveSlotXf(FTransform& OutXf, FVector& OutNormal) const{
+    if (!CurrentBunker.IsValid() || CurrentSlot == INDEX_NONE) return false;    OutXf = CurrentBunker->GetSlotWorldTransform(CurrentSlot);
     OutNormal = CurrentBunker->GetSlotNormal(CurrentSlot).GetSafeNormal();
     return true;
 }
@@ -158,10 +200,81 @@ bool UBunkerCoverComponent::EnterBestCover()
     auto* SBSS = W->GetSubsystem<USmartBunkerSelectionSubsystem>(); if (!SBSS) return false;
 
     TArray<FBunkerCandidate> Top;
-    SBSS->GetTopK(Owner, 3, Top);
-    
-    if (Top.Num() == 0) return false;
-    return EnterCover(Top[0].Bunker, Top[0].SlotIndex);
+    SBSS->GetTopK(Owner, 5, Top); // grab a few
+
+    //  Do not pick our currently-occupied bunker 
+    if (CurrentBunker.IsValid())
+    {
+        ABunkerBase* Curr = CurrentBunker.Get();
+        Top.RemoveAll([Curr](const FBunkerCandidate& C)
+        {
+            return C.Bunker == Curr;   // exclude current bunker entirely
+        });
+    }
+
+    if (Top.Num() == 0) return false; // nothing new to go to
+
+    // Reserve the slot now so AI/teammates don’t steal it
+    ABunkerBase* B = Top[0].Bunker; 
+    const int32 S = Top[0].SlotIndex;
+    if (!B || !B->TryClaimSlot(S, Owner)) return false;
+
+    // Switch current; compute target hug transform (location we’ll approach)
+    CurrentBunker = B; 
+    CurrentSlot   = S;
+
+    FTransform SlotXf; 
+    FVector Normal;
+    if (!ResolveSlotXf(SlotXf, Normal))
+    {
+        B->ReleaseSlot(S, Owner);
+        CurrentBunker.Reset(); 
+        CurrentSlot = INDEX_NONE; 
+        return false;
+    }
+
+    if (!ComputeHugTransform(SlotXf, Normal, ApproachLoc, ApproachRot))
+    {
+        B->ReleaseSlot(S, Owner);
+        CurrentBunker.Reset(); 
+        CurrentSlot = INDEX_NONE; 
+        return false;
+    }
+
+    // Approach setup (unchanged)
+    ACharacter* Char = Cast<ACharacter>(Owner);
+    const float Dist2D = Char ? FVector::Dist2D(Char->GetActorLocation(), ApproachLoc) : 0.f;
+
+    bool bHasLOS = true;
+    if (UWorld* World = GetWorld())
+    {
+        FHitResult Hit;
+        FCollisionQueryParams P(SCENE_QUERY_STAT(CoverApproachLOS), false, Owner);
+        const FVector EyeA = (Char ? Char->GetActorLocation() : ApproachLoc) + FVector(0,0,44.f);
+        const FVector EyeB = ApproachLoc + FVector(0,0,44.f);
+        bHasLOS = !World->LineTraceSingleByChannel(Hit, EyeA, EyeB, ECC_Visibility, P);
+    }
+
+    ActiveApproachMode = (Dist2D <= ApproachNudgeMaxDistance && bHasLOS)
+                           ? ECoverApproachMode::Nudge
+                           : ECoverApproachMode::Nav;
+
+    State = ECoverState::Approach;
+
+    if (Char && Char->GetCharacterMovement())
+    {
+        SavedMaxWalkSpeed = Char->GetCharacterMovement()->MaxWalkSpeed;
+        Char->GetCharacterMovement()->MaxWalkSpeed = ApproachWalkSpeed;
+    }
+
+    AlignControllerYawTo(ApproachRot);
+
+    if (ActiveApproachMode == ECoverApproachMode::Nav && Char && Char->GetController())
+    {
+        UAIBlueprintHelperLibrary::SimpleMoveToLocation(Char->GetController(), ApproachLoc);
+    }
+
+    return true;
 }
 
 bool UBunkerCoverComponent::EnterCover(ABunkerBase* Bunker, int32 SlotIndex)
@@ -247,17 +360,20 @@ bool UBunkerCoverComponent::EnterCover(ABunkerBase* Bunker, int32 SlotIndex)
         StartRot = Char->GetActorRotation();
         TargetLoc = TargetHugLoc;
         TargetRot = TargetHugRot;
-        BaseLoc   = TargetHugLoc; // keep Base for lean relative to target
-        BaseRot   = TargetHugRot;
         TransitionElapsed = 0.f;
         bIsTransitioning  = true;
         PendingSlot       = SlotIndex;
     }
     else
     {
-        PlaceAtHugTransform(TargetHugLoc, TargetHugRot);
-        PendingSlot = INDEX_NONE;
-        bIsTransitioning = false;
+        // First-time entry or cross-bunker: blend in (no teleport)
+        StartLoc = Char->GetActorLocation();
+        StartRot = Char->GetActorRotation();
+        TargetLoc = TargetHugLoc;
+        TargetRot = TargetHugRot;
+        TransitionElapsed = 0.f;
+        bIsTransitioning  = true;
+        PendingSlot       = SlotIndex;
     }
 
     // Reset lean and state
@@ -268,13 +384,11 @@ bool UBunkerCoverComponent::EnterCover(ABunkerBase* Bunker, int32 SlotIndex)
     // Pose (stand/crouch/prone) per slot
     ApplyStanceForSlot(Bunker, SlotIndex);
 
-    // Camera shoulder offset while in cover (simple lateral nudge away from wall)
-    if (CachedBoom)
-    {
-        CachedBoom->SocketOffset = FVector(0.f, CoverShoulderOffset, 0.f);
-        // Leave collision enabled; the extra clearance + shoulder offset should be enough
-    }
-
+    // Initial shoulder based on current player view vs slot frame
+    SetInitialShoulderFromView(Normal);
+    
+    // Make sure controller yaw matches new bunker facing (camera looks right way)
+    AlignControllerYawTo(TargetHugRot); 
     return true;
 }
 
@@ -294,6 +408,15 @@ void UBunkerCoverComponent::ExitCover()
     CurrentBunker.Reset();
     CurrentSlot = INDEX_NONE;
     State = ECoverState::None;
+
+    if (ACharacter* Char = Cast<ACharacter>(GetOwner()))
+    {
+        if (Char->GetCharacterMovement() && SavedMaxWalkSpeed > 0.f)
+        {
+            Char->GetCharacterMovement()->MaxWalkSpeed = SavedMaxWalkSpeed;
+            SavedMaxWalkSpeed = 0.f;
+        }
+    }
 }
 
 bool UBunkerCoverComponent::TraverseBestSlotOnCurrentBunker(int32 DesiredIndex)
@@ -321,6 +444,56 @@ void UBunkerCoverComponent::SetLeanAxis(float Axis)
 {
     DesiredLeanAxis = FMath::Clamp(Axis, -1.f, 1.f);
     if (State != ECoverState::None) State = (FMath::IsNearlyZero(DesiredLeanAxis)) ? ECoverState::Hug : ECoverState::Peek;
+}
+
+bool UBunkerCoverComponent::FindAdjacentSlotOnCurrentBunker(int DirSign, int32& OutSlotIndex) const
+{
+    OutSlotIndex = INDEX_NONE;
+    if (!CurrentBunker.IsValid() || CurrentSlot == INDEX_NONE) return false;
+
+    // Current frame
+    const FTransform CurrXf = CurrentBunker->GetSlotWorldTransform(CurrentSlot);
+    const FVector CurrP = CurrXf.GetLocation();
+    const FVector Normal = CurrentBunker->GetSlotNormal(CurrentSlot).GetSafeNormal();
+    const FVector Right = FVector::CrossProduct(FVector::UpVector, Normal).GetSafeNormal();
+
+    float BestAlong = -FLT_MAX;   // how far along the desired side (+Right or -Right)
+    float BestDist = FLT_MAX;
+
+    const int32 Count = CurrentBunker->GetSlotCount();
+    for (int32 i = 0; i < Count; ++i)
+    {
+        if (i == CurrentSlot || CurrentBunker->IsSlotOccupied(i)) continue;
+        const FVector P = CurrentBunker->GetSlotWorldTransform(i).GetLocation();
+        const FVector Delta = P - CurrP;
+
+        const float Along = FVector::DotProduct(Delta, Right) * DirSign; // positive means in requested direction
+        if (Along <= 5.f) continue; // must be meaningfully in that direction
+
+        const float Dist = Delta.Size2D();
+        // prefer bigger Along, then nearest distance
+        if (Along > BestAlong || (FMath::IsNearlyEqual(Along, BestAlong, 1.f) && Dist < BestDist))
+        {
+            BestAlong = Along;
+            BestDist = Dist;
+            OutSlotIndex = i;
+        }
+    }
+    return OutSlotIndex != INDEX_NONE;
+}
+
+bool UBunkerCoverComponent::TraverseLeft()
+{
+    int32 Next = INDEX_NONE;
+    if (!FindAdjacentSlotOnCurrentBunker(-1, Next)) return false;
+    return EnterCover(CurrentBunker.Get(), Next);
+}
+
+bool UBunkerCoverComponent::TraverseRight()
+{
+    int32 Next = INDEX_NONE;
+    if (!FindAdjacentSlotOnCurrentBunker(+1, Next)) return false;
+    return EnterCover(CurrentBunker.Get(), Next);
 }
 
 void UBunkerCoverComponent::ApplyHugPose(const FTransform& SlotXf, const FVector& Normal)
@@ -361,35 +534,153 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 {
     if (State == ECoverState::None) return;
 
-    FTransform SlotXf; FVector Normal;
-    if (!ResolveSlotXf(SlotXf, Normal)) { ExitCover(); return; }
+    FTransform SlotXf;
+    FVector Normal;
+    if (!ResolveSlotXf(SlotXf, Normal))
+    {
+        ExitCover();
+        return;
+    }
 
     ACharacter* Char = Cast<ACharacter>(GetOwner());
-    if (!Char) return;
+    if (!Char)
+    {
+        ExitCover();
+        return;
+    }
+
+    // Approach: either Nudge (AddMovementInput) or Nav (SimpleMoveToLocation already active)
+    if (State == ECoverState::Approach)
+    {
+        const FVector To = (ApproachLoc - Char->GetActorLocation());
+        const float Dist = To.Size2D();
+
+        // Face the wall orientation as we approach
+        const FRotator YawOnly(0.f, ApproachRot.Yaw, 0.f);
+        Char->SetActorRotation(YawOnly);
+        AlignControllerYawTo(ApproachRot);
+
+        // Walk toward target (no AI controller required)
+        if (Dist > ApproachStopDistance)
+        {
+            if (ActiveApproachMode == ECoverApproachMode::Nudge)
+            {
+                const FVector Dir = To.GetSafeNormal2D();
+                Char->AddMovementInput(Dir, ApproachMoveSpeed);
+            }
+
+            // Nav mode: controller keeps moving via SimpleMoveToLocation
+            return; // still approaching; skip the rest of cover logic this frame
+        }
+
+        if (ActiveApproachMode == ECoverApproachMode::Nav)
+        {
+            Char->GetCharacterMovement()->StopMovementImmediately();
+        }
+
+        // Close enough: ease the last few cm into perfect hug pose
+        StartLoc = Char->GetActorLocation();
+        StartRot = Char->GetActorRotation();
+        TargetLoc = ApproachLoc;
+        TargetRot = ApproachRot;
+        TransitionElapsed = 0.f;
+
+        bIsTransitioning = true;
+
+        // Reset lean & camera shoulder default (away from wall)
+        DesiredLeanAxis = 0.f;
+        CurrentLean = 0.f;
+
+        // pick initial shoulder from current view
+        SetInitialShoulderFromView(/*SlotNormal*/ Normal);
+
+        // Stance
+        if (CurrentBunker.IsValid() && CurrentSlot != INDEX_NONE)
+        {
+            ApplyStanceForSlot(CurrentBunker.Get(), CurrentSlot);
+        }
+
+        State = ECoverState::Hug;
+
+        // Restore walk speed now that we arrived
+        if (Char->GetCharacterMovement() && SavedMaxWalkSpeed > 0.f)
+        {
+            Char->GetCharacterMovement()->MaxWalkSpeed = SavedMaxWalkSpeed;
+            SavedMaxWalkSpeed = 0.f;
+        }
+
+        // fall through to Hug logic below next tick
+    }
 
     if (bIsTransitioning)
     {
         TransitionElapsed += DeltaTime;
-        const float Alpha = FMath::Clamp(TransitionElapsed / FMath::Max(SlotTransitionTime, KINDA_SMALL_NUMBER), 0.f, 1.f);
 
-        const FVector NewLoc = FMath::Lerp(StartLoc, TargetLoc, Alpha);
+        // Use entry blend time when just finishing the approach; otherwise use slot transition time.
+        const bool bEntryEase = (State == ECoverState::Hug &&
+            TransitionElapsed <= EntrySnapBlendTime + SMALL_NUMBER &&
+            !StartLoc.IsNearlyZero() && !TargetLoc.IsNearlyZero());
+
+        const float Duration = bEntryEase
+                                   ? EntrySnapBlendTime
+                                   : FMath::Max(SlotTransitionTime, KINDA_SMALL_NUMBER);
+        const float Alpha = FMath::Clamp(TransitionElapsed / Duration, 0.f, 1.f);
+
+        // --- 1) Lerp XY only ---
+        const FVector StartXY(StartLoc.X, StartLoc.Y, 0.f);
+        const FVector TargetXY(TargetLoc.X, TargetLoc.Y, 0.f);
+        const FVector NewXY = FMath::Lerp(StartXY, TargetXY, Alpha);
+
+        // --- 2) Lerp rotation normally ---
         const FRotator NewRot = FMath::Lerp(StartRot, TargetRot, Alpha);
 
+        // --- 3) Ground-snap Z at NewXY with a capsule sweep (static + dynamic ground) ---
+        float Radius = 42.f, HalfHeight = 88.f;
+        if (ACharacter* C = Cast<ACharacter>(GetOwner()))
+        {
+            if (UCapsuleComponent* Cap = C->GetCapsuleComponent())
+            {
+                Cap->GetScaledCapsuleSize(Radius, HalfHeight);
+            }
+        }
+
+        const FVector SweepStart(NewXY.X, NewXY.Y, FMath::Max(StartLoc.Z, TargetLoc.Z) + FloorSnapUp);
+        const FVector SweepEnd(NewXY.X, NewXY.Y, FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown);
+
+        FHitResult SweepHit;
+        FCollisionQueryParams SweepParams(SCENE_QUERY_STAT(CoverSlideSnap), false, GetOwner());
+        FCollisionObjectQueryParams ObjMask;
+        ObjMask.AddObjectTypesToQuery(ECC_WorldStatic);
+        ObjMask.AddObjectTypesToQuery(ECC_WorldDynamic);
+
+        const FCollisionShape Capsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+
+        float NewZ;
+        if (GetWorld()->SweepSingleByObjectType(SweepHit, SweepStart, SweepEnd, FQuat::Identity, ObjMask, Capsule,
+                                                SweepParams))
+        {
+            NewZ = SweepHit.Location.Z + HalfHeight + FloorSnapPadding;
+        }
+        else
+        {
+            // Rare fallback if no hit (keeps motion stable).
+            NewZ = FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha);
+        }
+
+        const FVector NewLoc(NewXY.X, NewXY.Y, NewZ);
         Char->SetActorLocationAndRotation(NewLoc, NewRot, /*bSweep=*/true);
 
         if (Alpha >= 1.f - SMALL_NUMBER)
         {
             bIsTransitioning = false;
             PendingSlot = INDEX_NONE;
-        }
-    }
-    else
-    {
-        // Normal lean behavior around BaseLoc/Rot
-        ApplyLean(DeltaTime, SlotXf, Normal);
-        Char->SetActorRotation(BaseRot);
-    }
 
+            // Finalize exactly on target to avoid sub-mm drift.
+            PlaceAtHugTransform(TargetLoc, TargetRot);
+        }
+
+        return; // We handled this frame’s movement.
+    }
     // 4) Camera: flip shoulder with lean side (simple)
     if (CachedBoom)
     {
