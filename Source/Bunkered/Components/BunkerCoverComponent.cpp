@@ -72,8 +72,24 @@ bool UBunkerCoverComponent::CoverSuggestPrev()
 bool UBunkerCoverComponent::CoverSuggestConfirm()
 {
 	if (!Suggested.IsValidIndex(SuggestedIndex)) return false;
-	const FBunkerCandidate& C = Suggested[SuggestedIndex];
-	return EnterCover(C.Bunker, C.SlotIndex); // reuse your smooth entry
+
+	// Try current pick
+	const FBunkerCandidate First = Suggested[SuggestedIndex];
+	if (EnterCover(First.Bunker, First.SlotIndex)) return true;
+
+	// Auto-advance once if it failed (stale/occupied), but don’t loop forever
+	DEBUG(5.0f, FColor::Red, TEXT("BunkerComponent::CoverSuggestionConfirm - Auto Advancing due to stale or occupied suggested bunker"));
+	const int32 NextIdx = (SuggestedIndex + 1) % Suggested.Num();
+	if (NextIdx != SuggestedIndex)
+	{
+		const FBunkerCandidate& Next = Suggested[NextIdx];
+		if (EnterCover(Next.Bunker, Next.SlotIndex))
+		{
+			SuggestedIndex = NextIdx;
+			return true;
+		}
+	}
+	return false;
 }
 
 void UBunkerCoverComponent::BeginPlay()
@@ -216,7 +232,7 @@ void UBunkerCoverComponent::PlaceAtHugTransform(const FVector& Loc, const FRotat
 
 	// single sweep move
 	FHitResult Hit;
-	Char->SetActorLocationAndRotation(Loc, Rot, /*bSweep=*/true, &Hit);
+	Char->SetActorLocation(Loc, /*bSweep=*/true, &Hit);
 	if (Hit.bStartPenetrating)
 	{
 		const FVector PushBack = (-Rot.Vector()) * (Hit.PenetrationDepth + 5.f);
@@ -224,7 +240,6 @@ void UBunkerCoverComponent::PlaceAtHugTransform(const FVector& Loc, const FRotat
 	}
 
 	BaseLoc = Loc; BaseRot = Rot;
-	AlignControllerYawTo(Rot);
 }
 
 void UBunkerCoverComponent::SetInitialShoulderFromView(const FVector& SlotNormal)
@@ -286,54 +301,52 @@ bool UBunkerCoverComponent::EnterBestCover()
 	// Get Top Bunkers
 	TArray<FBunkerCandidate> Top;
 	SBSS->GetTopKAcrossBunkers(Owner, 5, Top);
-	if (Top.Num() == 0)
+	if (Top.Num() == 0) { SelectionPolicy = PrevPolicy; return false; }
+
+	// If we're already in cover, never select the same bunker on "F"
+	if (CurrentBunker.IsValid())
 	{
-		SelectionPolicy = PrevPolicy;
-		return false;
+		ABunkerBase* Curr = CurrentBunker.Get();
+		Top.RemoveAll([Curr](const FBunkerCandidate& C){ return C.Bunker == Curr; });
 	}
+	if (Top.Num() == 0) { SelectionPolicy = PrevPolicy; return false; }
 
-	// If we’re already in cover and policy is SameBunkerOnly, just traverse locally.
-//	if (SelectionPolicy == ECoverSelectionPolicy::SameBunkerOnly && CurrentBunker.IsValid())
-//	{
-//		return TraverseBestSlotOnCurrentBunker(/*DesiredIndex=*/0);
-//	}
+	// Get New Top Bunker
+	ABunkerBase* NewBunker = Top[0].Bunker;
+	const int32  NewSlot = Top[0].SlotIndex;
 
+	// 1) Claim first
+	if (!NewBunker || !NewBunker->ClaimSlot(NewSlot, Owner)) { SelectionPolicy = PrevPolicy; return false; }
 
-	ABunkerBase* B = Top[0].Bunker;
-	const int32  S = Top[0].SlotIndex;
+	// 2) Release OLD if different
+	ABunkerBase* OldBunker = CurrentBunker.Get();
+	const int32  OldSlot = CurrentSlot;
+	if (OldBunker && OldSlot != INDEX_NONE && (OldBunker != NewBunker || OldSlot != NewSlot))
+	{ OldBunker->ReleaseSlot(OldSlot, Owner); }
 
-	// Reserve early so AI/teammates don’t steal it
-	if (!B || !B->ClaimSlot(S, Owner))
-	{
-		SelectionPolicy = PrevPolicy;
-		return false;
-	}
+	// 3) Now flip current
+	CurrentBunker = NewBunker;
+	CurrentSlot   = NewSlot;
 
-	CurrentBunker = B; CurrentSlot = S;
-	ApplyStanceForSlot(B, S); // so ComputeHugTransform sees crouch height
+	ApplyStanceForSlot(NewBunker, NewSlot);
 
 	FTransform SlotXf; FVector Normal;
 	if (!ResolveSlotXf(SlotXf, Normal))
 	{
+		// undo claim on failure
+		NewBunker->ReleaseSlot(NewSlot, Owner);
+		CurrentBunker.Reset(); CurrentSlot = INDEX_NONE;
 		SelectionPolicy = PrevPolicy;
-		B->ReleaseSlot(S, Owner);
-		CurrentBunker.Reset();
-		CurrentSlot = INDEX_NONE; return false;
-	}
-	const FVector SlotWorld = SlotXf.GetLocation();
-	const FVector BunkerWorld = CurrentBunker->GetActorLocation();
-	
-	if (!ComputeHugTransform(SlotXf, Normal, ApproachLoc, ApproachRot))
-	{
-		SelectionPolicy = PrevPolicy;
-		B->ReleaseSlot(S, Owner);
-		CurrentBunker.Reset();
-		CurrentSlot = INDEX_NONE;
 		return false;
 	}
-	
-	DEBUG(10.0f, FColor::Green, TEXT("SlotWorldZ=%f  BunkerWorldZ=%f  LocalZ≈%f"),
-	   SlotWorld.Z, BunkerWorld.Z, SlotWorld.Z - BunkerWorld.Z);
+
+	if (!ComputeHugTransform(SlotXf, Normal, ApproachLoc, ApproachRot))
+	{
+		NewBunker->ReleaseSlot(NewSlot, Owner);
+		CurrentBunker.Reset(); CurrentSlot = INDEX_NONE;
+		SelectionPolicy = PrevPolicy;
+		return false;
+	}
 
 	DEBUG(10.0f, FColor::Orange, TEXT("Computed Hug Transform: %s"), *ApproachLoc.ToString());
 
@@ -366,6 +379,8 @@ bool UBunkerCoverComponent::EnterBestCover()
 	{
 		UAIBlueprintHelperLibrary::SimpleMoveToLocation(Char->GetController(), ApproachLoc);
 	}
+
+	SelectionPolicy = PrevPolicy;
 	return true;
 }
 
@@ -400,16 +415,32 @@ bool UBunkerCoverComponent::EnterCover(ABunkerBase* Bunker, int32 SlotIndex)
 	ApplyStanceForSlot(Bunker, SlotIndex);
 
 	FTransform SlotXf; FVector Normal;
-	if (!ResolveSlotXf(SlotXf, Normal)) { Bunker->ReleaseSlot(SlotIndex, Owner); CurrentBunker.Reset(); CurrentSlot = INDEX_NONE; return false; }
+	if (!ResolveSlotXf(SlotXf, Normal))
+	{
+		Bunker->ReleaseSlot(SlotIndex, Owner);
+		CurrentBunker.Reset();
+		CurrentSlot = INDEX_NONE;
+		return false;
+	}
 
 	// Guard: missing slot component -> GetSlotWorldTransform returns actor xf; refuse to place at origin
 	if (SlotXf.Equals(CurrentBunker->GetActorTransform(), 0.1f))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("EnterCover: %s Slot %d has no SlotPoint; refusing to place at bunker origin."), *CurrentBunker->GetName(), CurrentSlot);
-		CurrentBunker->ReleaseSlot(CurrentSlot, Owner); CurrentBunker.Reset(); CurrentSlot = INDEX_NONE; return false;
+		CurrentBunker->ReleaseSlot(CurrentSlot, Owner);
+		CurrentBunker.Reset();
+		CurrentSlot = INDEX_NONE;
+		return false;
 	}
 
-	ACharacter* Char = Cast<ACharacter>(Owner); if (!Char) { Bunker->ReleaseSlot(SlotIndex, Owner); CurrentBunker.Reset(); CurrentSlot = INDEX_NONE; return false; }
+	ACharacter* Char = Cast<ACharacter>(Owner);
+	if (!Char)
+	{
+		Bunker->ReleaseSlot(SlotIndex, Owner);
+		CurrentBunker.Reset();
+		CurrentSlot = INDEX_NONE;
+		return false;
+	}
 
 	// Compute target hug transform
 	FVector  TargetHugLoc; FRotator TargetHugRot;
@@ -600,11 +631,6 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 		}
 		DistPrev = Dist;
 
-		// Face the wall as we approach
-		const FRotator YawOnly(0.f, ApproachRot.Yaw, 0.f);
-		Char->SetActorRotation(YawOnly);
-		AlignControllerYawTo(ApproachRot);
-
 		if (Dist > ApproachStopDistance)
 		{
 			if (ApproachMode == ECoverApproachMode::Nudge)
@@ -708,7 +734,7 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 
 		// 3) Apply new location
 		const FVector NewLoc(NewXY.X, NewXY.Y, NewZ);
-		Char->SetActorLocationAndRotation(NewLoc, NewRot, /*bSweep=*/true);
+		Char->SetActorLocation(NewLoc, /*bSweep=*/true);
 
 		if (Alpha >= 1.f - KINDA_SMALL_NUMBER)
 		{

@@ -87,7 +87,7 @@ private:
 
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(ClampMin="0.0", Units="s",
 			  ToolTip="Time to slide between slots on the SAME bunker once a traverse begins.\nSet small (~0.1–0.3s) for snappy feel; 0 = instant snap."))
-	float SlotTransitionTime = 0.25f;
+	float SlotTransitionTime = 0.22f;
 	
 	// Transition state
 	bool  bIsTransitioning = false;
@@ -178,7 +178,7 @@ private:
 
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="cm/s",
 			  ToolTip="Temporary CharacterMovement MaxWalkSpeed while approaching cover (saved and restored when finished)."))
-	float ApproachWalkSpeed = 220.f;
+	float ApproachWalkSpeed = 350.f;
 
 	UPROPERTY(EditAnywhere, Category="Cover|Tuning", meta=(Units="s",
 			  ToolTip="Blend time for the final snap from approach position to the exact hug transform.\nTiny values feel crisp; larger values feel more animated."))
