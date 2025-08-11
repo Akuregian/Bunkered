@@ -3,6 +3,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Engine/CollisionProfile.h"
 #include "Subsystem/SmartBunkerSelectionSubsystem.h"
+#include "Utility/LoggingMacros.h"
 
 ABunkerBase::ABunkerBase()
 {
@@ -28,9 +29,9 @@ FTransform ABunkerBase::GetSlotWorldTransform(int32 Index) const
 		return GetActorTransform();
 	}
 
-	UActorComponent* AC = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
-	const USceneComponent* Comp = Cast<USceneComponent>(AC);
-	
+	UActorComponent* SlotComponent = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
+	const USceneComponent* Comp = Cast<USceneComponent>(SlotComponent);
+
 	return Comp ? Comp->GetComponentTransform() : GetActorTransform();
 }
 

@@ -31,7 +31,7 @@ ABunkeredCharacter::ABunkeredCharacter()
 
 	// Note: For faster iteration times these variables, and many more, can be tweaked in the Character Blueprint
 	// instead of recompiling to adjust them
-	GetCharacterMovement()->CrouchedHalfHeight = 44.f; // crouched height
+	GetCharacterMovement()->SetCrouchedHalfHeight(44.f); // crouched height
 	GetCharacterMovement()->JumpZVelocity = 500.f;
 	GetCharacterMovement()->AirControl = 0.35f;
 	GetCharacterMovement()->MaxWalkSpeed = 500.f;
@@ -121,6 +121,7 @@ void ABunkeredCharacter::DoMove(float Right, float Forward)
 		// deadzone to avoid spam
 		if (Right > 0.6f) { BunkerCoverComponent->TraverseRight(); return; }
 		if (Right < -0.6f){ BunkerCoverComponent->TraverseLeft();  return; }
+		
 		// Optional: allow a little forward/back to lean peek later
 		return; // swallow standard movement while in cover
 	}

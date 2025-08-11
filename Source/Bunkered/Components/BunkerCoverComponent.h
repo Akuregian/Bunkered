@@ -203,6 +203,8 @@ private:
 	FRotator ApproachRot = FRotator::ZeroRotator;
 	float    SavedMaxWalkSpeed = 0.f;
 
+	float DistPrev = 0.f;
+
 	// ---- Helpers ----
 	void   CacheCamera();
 	void   ApplyStanceForSlot(ABunkerBase* Bunker, int32 SlotIndex);

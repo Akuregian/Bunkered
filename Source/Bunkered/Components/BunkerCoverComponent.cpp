@@ -16,6 +16,7 @@ UBunkerCoverComponent::UBunkerCoverComponent()
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
+// Not used!
 bool UBunkerCoverComponent::CoverSuggestRefresh()
 {
 	Suggested.Reset(); SuggestedIndex = INDEX_NONE;
@@ -137,6 +138,7 @@ void UBunkerCoverComponent::CacheCamera()
 
 bool UBunkerCoverComponent::ComputeHugTransform(const FTransform& SlotXf, const FVector& Normal, FVector& OutLoc, FRotator& OutRot) const
 {
+	// Cast Character
 	const ACharacter* Char = Cast<ACharacter>(GetOwner());
 	if (!Char) return false;
 
@@ -149,35 +151,62 @@ bool UBunkerCoverComponent::ComputeHugTransform(const FTransform& SlotXf, const 
 	// 1) Horizontal: back away from wall along slot normal
 	const FVector SafeBackDir = Normal.GetSafeNormal();
 	const float   SafeBack    = CoverBackOffset + Radius * 0.6f + CameraWallClearance;
-	const FVector Anchor      = SlotXf.GetLocation();
-	const FVector PreLoc      = Anchor - SafeBackDir * SafeBack;
+	const FVector Slot      = SlotXf.GetLocation();
+	const FVector PreLoc      = Slot - SafeBackDir * SafeBack;
 	const FRotator FaceRot    = SafeBackDir.Rotation();
+
+	DEBUG(10.0f, FColor::Magenta, TEXT("Slot: %s, PreLoc: %s"), *Slot.ToString(), *PreLoc.ToString());
 
 	// 2) Vertical: capsule sweep to ground
 	UWorld* World = GetWorld();
-	if (!World) { OutLoc = PreLoc; OutRot = FaceRot; return true; }
+	if (!World)
+	{
+		OutLoc = PreLoc;
+		OutRot = FaceRot;
+		return true;
+	}
 
-
+	FCollisionObjectQueryParams ObjMask;
+	ObjMask.AddObjectTypesToQuery(ECC_WorldStatic);
+	
 	// floor trace straight down
 	FHitResult Hit;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverFloorSnap), false, GetOwner());
 	Params.AddIgnoredActor(GetOwner());
-	if (CurrentBunker.IsValid()) Params.AddIgnoredActor(CurrentBunker.Get());
+	if (CurrentBunker.IsValid())
+		Params.AddIgnoredActor(CurrentBunker.Get());
 
 	const FVector Start = PreLoc + FVector::UpVector * FloorSnapUp;
 	const FVector End   = PreLoc - FVector::UpVector * FloorSnapDown;
 
-	FCollisionObjectQueryParams ObjMask;
-	ObjMask.AddObjectTypesToQuery(ECC_WorldStatic);
+	// TODO: DEBUG - Remove
+	DrawDebugLine(World, Start, End, FColor::Emerald, false,5.0f, 0, 2.f);
 
 	// Try world static; fall back to visibility if needed
 	bool bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params);
-	if (!bHit) bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
+	if (!bHit)
+	{
+		DEBUG(5.0f, FColor::Magenta, TEXT("Line Trace in Compute Hug Transform hit Nadaaa.."));
+		bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
+	}
 
+	// Floor Z Location
 	const float FloorZ = bHit ? Hit.Location.Z : PreLoc.Z;
-	OutLoc = FVector(PreLoc.X, PreLoc.Y, FloorZ + HalfHeight + FloorSnapPadding);
-	OutRot = FaceRot;	
+
+	// Treat slot Z as the desired capsule-center height,
+	// but never go below floor + HalfHeight(=44) + padding.
+	constexpr float DesiredHalfHeight = 44.f;        // you said all players use 44.f
+	const float FloorCenterZ = FloorZ + DesiredHalfHeight + FloorSnapPadding;
+	const float SlotCenterZ  = Slot.Z;               // Slot was computed above
+	const float FinalZ       = FMath::Max(SlotCenterZ, FloorCenterZ);
+	
+
+	OutLoc = FVector(PreLoc.X, PreLoc.Y, FinalZ);
+	OutRot = FaceRot;
+
+	DrawDebugSphere(World, OutLoc, 5.0f, 10, FColor::Black,false, 5.0f,0, 3.f);
 	return true;
+	
 }
 
 void UBunkerCoverComponent::PlaceAtHugTransform(const FVector& Loc, const FRotator& Rot)
@@ -243,39 +272,70 @@ bool UBunkerCoverComponent::ResolveSlotXf(FTransform& OutXf, FVector& OutNormal)
 
 bool UBunkerCoverComponent::EnterBestCover()
 {
-	if (bIsTransitioning || State == ECoverState::Approach)
-	{
-		DEBUG(5.0f, FColor::Red, TEXT("Currently Transtioning, ABORTING!"));
-		return false;
-	}
+	if (bIsTransitioning || State == ECoverState::Approach) return false;
 
+	// Force GLOBAL selection
+	const ECoverSelectionPolicy PrevPolicy = SelectionPolicy;
+	SelectionPolicy = ECoverSelectionPolicy::Global;
+
+	// Gaurds
 	AActor* Owner = GetOwner(); if (!Owner) return false;
 	UWorld* W = Owner->GetWorld(); if (!W) return false;
 	auto* SBSS = W->GetSubsystem<USmartBunkerSelectionSubsystem>(); if (!SBSS) return false;
 
+	// Get Top Bunkers
 	TArray<FBunkerCandidate> Top;
 	SBSS->GetTopKAcrossBunkers(Owner, 5, Top);
-
-	// Don’t pick our current bunker to avoid trivial "reselect"
-	if (CurrentBunker.IsValid())
+	if (Top.Num() == 0)
 	{
-		ABunkerBase* Curr = CurrentBunker.Get();
-		Top.RemoveAll([Curr](const FBunkerCandidate& C){ return C.Bunker == Curr; });
+		SelectionPolicy = PrevPolicy;
+		return false;
 	}
-	if (Top.Num() == 0) return false;
+
+	// If we’re already in cover and policy is SameBunkerOnly, just traverse locally.
+//	if (SelectionPolicy == ECoverSelectionPolicy::SameBunkerOnly && CurrentBunker.IsValid())
+//	{
+//		return TraverseBestSlotOnCurrentBunker(/*DesiredIndex=*/0);
+//	}
+
 
 	ABunkerBase* B = Top[0].Bunker;
-	const int32   S = Top[0].SlotIndex;
+	const int32  S = Top[0].SlotIndex;
 
 	// Reserve early so AI/teammates don’t steal it
-	if (!B || !B->ClaimSlot(S, Owner)) return false;
+	if (!B || !B->ClaimSlot(S, Owner))
+	{
+		SelectionPolicy = PrevPolicy;
+		return false;
+	}
 
 	CurrentBunker = B; CurrentSlot = S;
 	ApplyStanceForSlot(B, S); // so ComputeHugTransform sees crouch height
 
 	FTransform SlotXf; FVector Normal;
-	if (!ResolveSlotXf(SlotXf, Normal)) { B->ReleaseSlot(S, Owner); CurrentBunker.Reset(); CurrentSlot = INDEX_NONE; return false; }
-	if (!ComputeHugTransform(SlotXf, Normal, ApproachLoc, ApproachRot)) { B->ReleaseSlot(S, Owner); CurrentBunker.Reset(); CurrentSlot = INDEX_NONE; return false; }
+	if (!ResolveSlotXf(SlotXf, Normal))
+	{
+		SelectionPolicy = PrevPolicy;
+		B->ReleaseSlot(S, Owner);
+		CurrentBunker.Reset();
+		CurrentSlot = INDEX_NONE; return false;
+	}
+	const FVector SlotWorld = SlotXf.GetLocation();
+	const FVector BunkerWorld = CurrentBunker->GetActorLocation();
+	
+	if (!ComputeHugTransform(SlotXf, Normal, ApproachLoc, ApproachRot))
+	{
+		SelectionPolicy = PrevPolicy;
+		B->ReleaseSlot(S, Owner);
+		CurrentBunker.Reset();
+		CurrentSlot = INDEX_NONE;
+		return false;
+	}
+	
+	DEBUG(10.0f, FColor::Green, TEXT("SlotWorldZ=%f  BunkerWorldZ=%f  LocalZ≈%f"),
+	   SlotWorld.Z, BunkerWorld.Z, SlotWorld.Z - BunkerWorld.Z);
+
+	DEBUG(10.0f, FColor::Orange, TEXT("Computed Hug Transform: %s"), *ApproachLoc.ToString());
 
 	// Approach setup
 	ACharacter* Char = Cast<ACharacter>(Owner);
@@ -311,7 +371,6 @@ bool UBunkerCoverComponent::EnterBestCover()
 
 bool UBunkerCoverComponent::EnterCover(ABunkerBase* Bunker, int32 SlotIndex)
 {
-
 	if (bIsTransitioning || State == ECoverState::Approach)
 	{
 		DEBUG(5.0f, FColor::Red, TEXT("Currently Transtioning, ABORTING!"));
@@ -403,10 +462,12 @@ void UBunkerCoverComponent::ExitCover()
 			SavedMaxWalkSpeed = 0.f;
 		}
 	}
+	SelectionPolicy = ECoverSelectionPolicy::Global;
 }
 
 bool UBunkerCoverComponent::TraverseBestSlotOnCurrentBunker(int32 /*DesiredIndex*/)
 {
+	SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
 	AActor* Owner = GetOwner(); if (!Owner) return false;
 	if (!CurrentBunker.IsValid() || CurrentSlot == INDEX_NONE) return false;
 	UWorld* W = Owner->GetWorld(); if (!W) return false;
@@ -463,6 +524,7 @@ bool UBunkerCoverComponent::FindAdjacentFreeSlotOnCurrentBunker(int DirSign, int
 
 bool UBunkerCoverComponent::TraverseLeft()
 {
+	SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
 	int32 Next = INDEX_NONE;
 	if (!FindAdjacentFreeSlotOnCurrentBunker(-1, Next)) return false;
 	return EnterCover(CurrentBunker.Get(), Next);
@@ -470,6 +532,7 @@ bool UBunkerCoverComponent::TraverseLeft()
 
 bool UBunkerCoverComponent::TraverseRight()
 {
+	SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
 	int32 Next = INDEX_NONE;
 	if (!FindAdjacentFreeSlotOnCurrentBunker(+1, Next)) return false;
 	return EnterCover(CurrentBunker.Get(), Next);
@@ -516,6 +579,27 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 		const FVector To = (ApproachLoc - Char->GetActorLocation());
 		const float Dist = To.Size2D();
 
+		static float StuckTimer = 0.f;
+		const float PrevDist = DistPrev; // keep a small member to remember last frame's Dist
+		if (ApproachMode == ECoverApproachMode::Nav)
+		{
+			const bool bGotCloser = (Dist < PrevDist - 2.f); // 2cm slack
+			if (!bGotCloser)
+			{
+				StuckTimer += DeltaTime;
+			} else
+			{
+				StuckTimer = 0.f;
+			}
+			// If nav isn't moving us after ~0.5s, fall back to Nudge
+			if (StuckTimer > 0.5f)
+			{
+				DEBUG(5.0f, FColor::Orange, TEXT("Player is Stuck!!!! Nudging the player to get it going"));
+				ApproachMode = ECoverApproachMode::Nudge;
+			}
+		}
+		DistPrev = Dist;
+
 		// Face the wall as we approach
 		const FRotator YawOnly(0.f, ApproachRot.Yaw, 0.f);
 		Char->SetActorRotation(YawOnly);
@@ -537,24 +621,34 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 		}
 
 		// Blend last few centimeters into perfect hug pose
-		StartLoc = Char->GetActorLocation(); StartRot = Char->GetActorRotation();
-		TargetLoc = ApproachLoc; TargetRot = ApproachRot;
+		StartLoc = Char->GetActorLocation();
+		StartRot = Char->GetActorRotation();
+		TargetLoc = ApproachLoc;
+		TargetRot = ApproachRot;
 		TransitionElapsed = 0.f;
 		bIsTransitioning = true;
-
-		DesiredLeanAxis = 0.f; CurrentLean = 0.f;
+		DesiredLeanAxis = 0.f;
+		CurrentLean = 0.f;
 
 		// when starting a slot transition (where you set StartLoc/TargetLoc):
 		const float Dist2D = FVector::Dist2D(StartLoc, TargetLoc);
+		// @Param SlideSpeed
 		const float SlideSpeed = 1200.f; // tweak
 		SlotTransitionTime = FMath::Max(0.08f, Dist2D / SlideSpeed);
 		
 		SetInitialShoulderFromView(Normal);
-		if (CurrentBunker.IsValid() && CurrentSlot != INDEX_NONE) { ApplyStanceForSlot(CurrentBunker.Get(), CurrentSlot); }
+		if (CurrentBunker.IsValid() && CurrentSlot != INDEX_NONE)
+		{
+			ApplyStanceForSlot(CurrentBunker.Get(), CurrentSlot);
+		}
 		State = ECoverState::Hug;
 
 		// Restore walking speed now that we arrived
-		if (Char->GetCharacterMovement() && SavedMaxWalkSpeed > 0.f) { Char->GetCharacterMovement()->MaxWalkSpeed = SavedMaxWalkSpeed; SavedMaxWalkSpeed = 0.f; }
+		if (Char->GetCharacterMovement() && SavedMaxWalkSpeed > 0.f)
+		{
+			Char->GetCharacterMovement()->MaxWalkSpeed = SavedMaxWalkSpeed;
+			SavedMaxWalkSpeed = 0.f;
+		}
 	}
 
 	// -- Transition blend (slot switch or entry) --
@@ -575,25 +669,45 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 
 		// Ground-snap Z at NewXY via capsule sweep
 		float Radius=42.f, HalfHeight=88.f;
-		if (UCapsuleComponent* Cap = Char->GetCapsuleComponent()) { Cap->GetScaledCapsuleSize(Radius, HalfHeight); }
+		if (UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+		{
+			Cap->GetScaledCapsuleSize(Radius, HalfHeight);
+		}
 
 		const FVector SweepStart(NewXY.X, NewXY.Y, FMath::Max(StartLoc.Z, TargetLoc.Z) + FloorSnapUp);
 		const FVector SweepEnd  (NewXY.X, NewXY.Y, FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown);
 
-		FHitResult SweepHit;
-		FCollisionQueryParams SweepParams(SCENE_QUERY_STAT(CoverSlideSnap), false, GetOwner());
-		SweepParams.AddIgnoredActor(GetOwner());
-		if (CurrentBunker.IsValid()) SweepParams.AddIgnoredActor(CurrentBunker.Get());
-		
-		FCollisionObjectQueryParams ObjMask;
-		ObjMask.AddObjectTypesToQuery(ECC_WorldStatic);
+		// 1) Get ground Z with a vertical line trace at NewXY
+		FHitResult DownHit;
+		FCollisionQueryParams DownParams(SCENE_QUERY_STAT(CoverSlideFloor), false, GetOwner());
+		DownParams.AddIgnoredActor(GetOwner());
+		if (CurrentBunker.IsValid()) DownParams.AddIgnoredActor(CurrentBunker.Get());
 
-		const bool bHit = GetWorld()->SweepSingleByObjectType(SweepHit, SweepStart, SweepEnd, FQuat::Identity,
-			ObjMask, FCollisionShape::MakeCapsule(Radius, HalfHeight), SweepParams);
+		const FVector DownStart(NewXY.X, NewXY.Y, FMath::Max(StartLoc.Z, TargetLoc.Z) + FloorSnapUp);
+		const FVector DownEnd  (NewXY.X, NewXY.Y, FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown);
 
-		const float FloorZ = bHit ? SweepHit.ImpactPoint.Z : FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha);
-		const float NewZ   = FloorZ + HalfHeight + FloorSnapPadding;		const FVector NewLoc(NewXY.X, NewXY.Y, NewZ);
+		bool bDown = GetWorld()->LineTraceSingleByChannel(DownHit, DownStart, DownEnd, ECC_WorldStatic, DownParams);
+		if (!bDown) {
+			bDown = GetWorld()->LineTraceSingleByChannel(DownHit, DownStart, DownEnd, ECC_Visibility, DownParams);
+		}
 
+		float GroundZ;
+		if (bDown && DownHit.ImpactNormal.Z >= 0.5f) {      // only accept "floor-ish" hits
+			GroundZ = DownHit.Location.Z;
+		} else {
+			// Fallback guess if no floor was found this frame
+			GroundZ = FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha) - 44.f; // assume center ≈ prev/target; subtract half-height
+		}
+
+		// 2) Clamp: stay at the slot-anchored Target Z unless that would put us below the floor
+		constexpr float DesiredHalfHeight = 44.f;
+		const float FloorClampZ = GroundZ + DesiredHalfHeight + FloorSnapPadding;
+
+		const float TargetZ = TargetLoc.Z;     // from ComputeHugTransform (slot Z clamped to ground)
+		const float NewZ    = FMath::Max(TargetZ, FloorClampZ);
+
+		// 3) Apply new location
+		const FVector NewLoc(NewXY.X, NewXY.Y, NewZ);
 		Char->SetActorLocationAndRotation(NewLoc, NewRot, /*bSweep=*/true);
 
 		if (Alpha >= 1.f - KINDA_SMALL_NUMBER)
