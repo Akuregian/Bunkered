@@ -16,7 +16,7 @@ class ABunkerBase;
  * Ownership: ABunkerBase owns claims. We never mutate occupancy here.
  */
 USTRUCT(BlueprintType)
-struct FBunkerCandidate
+struct FBunkerCandidateDepricated
 {
 	GENERATED_BODY()
 
@@ -66,15 +66,15 @@ public:
 	// Query API
 	/** Build a small candidate set around Viewer (distance + occupancy prefilter + angle). */
 	UFUNCTION(BlueprintCallable, Category="Cover|Query")
-	void BuildCandidates(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidate>& OutCandidates) const;
+	void BuildCandidates(const AActor* Viewer, int32 MaxCandidates, TArray<FBunkerCandidateDepricated>& OutCandidates) const;
 
 	/** Best single slot per bunker, globally sorted by score. */
 	UFUNCTION(BlueprintCallable, Category="Cover|Query")
-	void GetTopKAcrossBunkers(const AActor* Viewer, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
+	void GetTopKAcrossBunkers(const AActor* Viewer, int32 K, TArray<FBunkerCandidateDepricated>& OutTopK) const;
 
 	/** Top K free slots within a specific bunker. */
 	UFUNCTION(BlueprintCallable, Category="Cover|Query")
-	void GetTopKWithinBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidate>& OutTopK) const;
+	void GetTopKWithinBunker(const AActor* Viewer, ABunkerBase* Bunker, int32 K, TArray<FBunkerCandidateDepricated>& OutTopK) const;
 
 	// Debug controls (editable on CDO)
 	UPROPERTY(EditAnywhere, Category="Cover|Debug")
