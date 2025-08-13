@@ -1,165 +1,232 @@
-#include "Bunkers/BunkerBase.h"
-#include "DrawDebugHelpers.h"
-#include "Subsystems/WorldSubsystem.h"
-#include "Engine/CollisionProfile.h"
-#include "Subsystem/SmartBunkerSelectionSubsystem.h"
-#include "Utility/LoggingMacros.h"
+// Bunkers/BunkerBase.cpp
+#include "BunkerBase.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/ArrowComponent.h"
+#include "Engine/Engine.h"
+#include "Misc/DataValidation.h"
 
 ABunkerBase::ABunkerBase()
 {
-	PrimaryActorTick.bCanEverTick = false;
+    Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    RootComponent = Root;
 
-	RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-	SetRootComponent(RootSceneComponent);
-
-	BunkerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
-	BunkerMesh->SetupAttachment(RootSceneComponent);
-	BunkerMesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+    Bunker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
+    Bunker->SetupAttachment(RootComponent);
+    Bunker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+    Bunker->SetCanEverAffectNavigation(false);
 }
 
-bool ABunkerBase::IsSlotOccupied(int32 Index) const
+int32 ABunkerBase::FindClosestValidSlot(const FVector& WorldLocation, float MaxDist, int32& OutExactIndex) const
 {
-	return Slots.IsValidIndex(Index) ? Slots[Index].bOccupied : true;
+    OutExactIndex = INDEX_NONE;
+
+    const float MaxDistSq = FMath::Square(MaxDist);
+    float BestSq = MaxDistSq;
+    int32 BestIdx = INDEX_NONE;
+
+    for (int32 i = 0; i < Slots.Num(); ++i)
+    {
+        const FTransform WT = GetSlotWorldTransform(i);
+        const float DistSq = FVector::DistSquared(WT.GetLocation(), WorldLocation);
+        if (DistSq < BestSq)
+        {
+            BestSq = DistSq;
+            BestIdx = i;
+        }
+    }
+
+    OutExactIndex = BestIdx;
+    return BestIdx;
 }
 
-FTransform ABunkerBase::GetSlotWorldTransform(int32 Index) const
+FTransform ABunkerBase::GetSlotWorldTransform(int32 SlotIndex) const
 {
-	if (!Slots.IsValidIndex(Index))
-	{
-		return GetActorTransform();
-	}
+    check(Slots.IsValidIndex(SlotIndex));
+    const FCoverSlot& Slot = Slots[SlotIndex];
 
-	UActorComponent* SlotComponent = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
-	const USceneComponent* Comp = Cast<USceneComponent>(SlotComponent);
+    if (Slot.bUseComponentTransform)
+    {
+        // Resolve the referenced component on this actor
+        if (UActorComponent* AC = Slot.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this)))
+        {
+            if (USceneComponent* SC = Cast<USceneComponent>(AC))
+            {
+                return SC->GetComponentTransform();
+            }
+        }
+    }
 
-	return Comp ? Comp->GetComponentTransform() : GetActorTransform();
-}
-
-FVector ABunkerBase::GetSlotNormal(int32 Index) const
-{
-	if (!Slots.IsValidIndex(Index)) return GetActorForwardVector();
-
-	UActorComponent* AC = Slots[Index].SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
-	const USceneComponent* Comp = Cast<USceneComponent>(AC);
-	// Designer orients Arrow X (Forward) outward from cover
-	return Comp ? Comp->GetForwardVector() : GetActorForwardVector();
-}
-
-bool ABunkerBase::ClaimSlot(int32 Index, AActor* Claimant)
-{
-	if (!Slots.IsValidIndex(Index) || !Claimant) return false;
-	FBunkerCoverSlot& S = Slots[Index];
-	if (S.bOccupied && S.ClaimedBy.IsValid() && S.ClaimedBy.Get() != Claimant)
-	{
-		return false; // already held by someone else
-	}
-	S.bOccupied = true;
-	S.ClaimedBy = Claimant;
-	return true;
-}
-
-void ABunkerBase::ReleaseSlot(int32 Index, AActor* Claimant)
-{
-	if (!Slots.IsValidIndex(Index)) return;
-	FBunkerCoverSlot& S = Slots[Index];
-	if (!S.bOccupied) return;
-	if (S.ClaimedBy.IsValid() && S.ClaimedBy.Get() != Claimant)
-	{
-		return; // ignore release attempts from others
-	}
-	S.bOccupied = false;
-	S.ClaimedBy.Reset();
-}
-
-int32 ABunkerBase::FindNearestFreeSlot(const FVector& FromLocation, float MaxDist) const
-{
-	int32 BestIdx = -1;
-	float BestDistSq = FMath::Square(MaxDist);
-
-	for (int32 i = 0; i < Slots.Num(); ++i)
-	{
-		const FBunkerCoverSlot& S = Slots[i];
-		if (S.bOccupied) continue;
-
-		UActorComponent* AC = S.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
-		const USceneComponent* Comp = Cast<USceneComponent>(AC);
-		if (!Comp) continue;
-
-		const float DistSq = FVector::DistSquared(FromLocation, Comp->GetComponentLocation());
-		if (DistSq < BestDistSq)
-		{
-			BestDistSq = DistSq;
-			BestIdx = i;
-		}
-	}
-	return BestIdx;
-}
-
-void ABunkerBase::BeginPlay()
-{
-	Super::BeginPlay();
-
-	if (UWorld* W = GetWorld())
-	{
-		if (auto* SBSS = W->GetSubsystem<USmartBunkerSelectionSubsystem>())
-		{
-			SBSS->RegisterBunker(this);
-		}
-	}
-}
-
-void ABunkerBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
-{
-	if (UWorld* W = GetWorld())
-	{
-		if (auto* SBSS = W->GetSubsystem<USmartBunkerSelectionSubsystem>())
-		{
-			SBSS->UnregisterBunker(this);
-		}
-	}
-	Super::EndPlay(EndPlayReason);
+    // Fallback: local anchor relative to bunker actor
+    return Slot.LocalAnchor * GetActorTransform();
 }
 
 #if WITH_EDITOR
+
+static void LogEditorNote(const FString& Msg)
+{
+#if !NO_LOGGING
+    UE_LOG(LogTemp, Warning, TEXT("%s"), *Msg);
+#endif
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Yellow, Msg);
+    }
+}
+
 void ABunkerBase::OnConstruction(const FTransform& Transform)
 {
-	Super::OnConstruction(Transform);
+    Super::OnConstruction(Transform);
 
-	for (int32 i = 0; i < Slots.Num(); ++i)
-	{
-		UActorComponent* AC = Slots[i].SlotPoint.GetComponent(this); // non-const ok here
-		if (!AC)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("%s: Slot %d has no SlotPoint assigned. Will fall back to bunker origin."), *GetName(), i);
-		}
-	}
+    // 1) Optional: auto-tag Arrow children so designers don’t forget
+    if (bAutoTagArrowChildren)
+    {
+        TArray<UArrowComponent*> Arrows;
+        GetComponents<UArrowComponent>(Arrows);
+        for (UArrowComponent* Arrow : Arrows)
+        {
+            if (!Arrow) continue;
+            if (!SlotTag.IsNone() && !Arrow->ComponentHasTag(SlotTag))
+            {
+                Arrow->ComponentTags.Add(SlotTag);
+            }
+        }
+    }
 
-	if (bDrawDebug) { DrawDebug(); }
+    // 2) Auto-sync slots array from tagged children
+    if (bAutoSyncSlotsFromChildren)
+    {
+        RebuildSlotsFromChildren();
+    }
 }
-#endif
 
-void ABunkerBase::DrawDebug() const
+void ABunkerBase::TagAllArrowChildrenAsSlots()
 {
-	if (!bDrawDebug) return;
+    TArray<UArrowComponent*> Arrows;
+    GetComponents<UArrowComponent>(Arrows);
 
-	for (int32 i = 0; i < Slots.Num(); ++i)
-	{
-		const FBunkerCoverSlot& S = Slots[i];
+    int32 Tagged = 0;
+    for (UArrowComponent* Arrow : Arrows)
+    {
+        if (!Arrow) continue;
+        if (!SlotTag.IsNone() && !Arrow->ComponentHasTag(SlotTag))
+        {
+            Arrow->ComponentTags.Add(SlotTag);
+            ++Tagged;
+        }
+    }
 
-		UActorComponent* AC = S.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this));
-		const USceneComponent* Comp = Cast<USceneComponent>(AC);
-		if (!Comp) continue;
-
-		const FVector P = Comp->GetComponentLocation();
-		const FVector F = Comp->GetForwardVector();
-		const FVector U = Comp->GetUpVector();
-
-		const FColor C = S.bOccupied ? OccupiedColor : FreeColor;
-
-		DrawDebugLine(GetWorld(), P, P + F * 60.f, C, false, DebugDuration, 0, 2.f);
-		DrawDebugLine(GetWorld(), P, P + U * 40.f, FColor::Blue, false, DebugDuration+5.0f, 0, 1.f);
-
-		const FString Label = FString::Printf(TEXT("[%d] %s (%s)"), i, *S.SlotName.ToString(), S.bRightSide ? TEXT("Right") : TEXT("Left"));
-		DrawDebugString(GetWorld(), P + FVector(0,0,18.f), Label, nullptr, C, DebugDuration, false);
-	}
+    LogEditorNote(FString::Printf(TEXT("[Bunker] Tagged %d Arrow component(s) with %s"), Tagged, *SlotTag.ToString()));
 }
+
+void ABunkerBase::RebuildSlotsFromChildren()
+{
+    TArray<USceneComponent*> ChildrenSlots;
+    GetComponents<USceneComponent>(ChildrenSlots);
+
+    TArray<FCoverSlot> NewSlots;
+    bool bFoundTagged = false;
+
+    // First pass: tagged components only
+    if (!SlotTag.IsNone())
+    {
+        for (USceneComponent* ChildSlot : ChildrenSlots)
+        {
+            if (!ChildSlot || ChildSlot == RootComponent) continue;
+            if (ChildSlot->ComponentHasTag(SlotTag))
+            {
+                bFoundTagged = true;
+
+                FCoverSlot S;
+                S.SlotPoint.OtherActor = this;               // resolve on self
+                S.SlotPoint.ComponentProperty = ChildSlot->GetFName();
+                S.bUseComponentTransform = true;
+
+                // Sensible defaults (tweak as needed)
+                S.AllowedStances = { ECoverStance::Crouch };
+                S.AllowedPeeks   = {};    // empty = all peeks allowed
+                S.EntryRadius    = 75.f;
+                S.SlotName       = ChildSlot->GetFName();
+
+                NewSlots.Add(S);
+            }
+        }
+    }
+
+    // Fallback: if none tagged but allowed to fallback, harvest all Arrow children
+    if (!bFoundTagged && bFallbackUseAllArrowChildren)
+    {
+        TArray<UArrowComponent*> Arrows;
+        GetComponents<UArrowComponent>(Arrows);
+        for (UArrowComponent* Arrow : Arrows)
+        {
+            if (!Arrow) continue;
+
+            FCoverSlot S;
+            S.SlotPoint.OtherActor = this;
+            S.SlotPoint.ComponentProperty = Arrow->GetFName();
+            S.bUseComponentTransform = true;
+
+            S.AllowedStances = { ECoverStance::Crouch };
+            S.AllowedPeeks   = {};
+            S.EntryRadius    = 75.f;
+            S.SlotName       = Arrow->GetFName();
+
+            NewSlots.Add(S);
+        }
+
+        if (Arrows.Num() > 0)
+        {
+            LogEditorNote(TEXT("[Bunker] No tagged components; harvested all Arrow children as slots (fallback)."));
+        }
+    }
+
+    Slots = MoveTemp(NewSlots);
+
+    if (Slots.Num() == 0)
+    {
+        LogEditorNote(TEXT("[Bunker] No slot sources found. Add child ArrowComponents and tag them with CoverSlot, or enable fallback/auto-tag."));
+    }
+}
+
+EDataValidationResult ABunkerBase::IsDataValid(FDataValidationContext& Context) const
+{
+    // Validate that the bunker will produce usable slots
+    TArray<USceneComponent*> ChildrenSlots;
+    const_cast<ABunkerBase*>(this)->GetComponents<USceneComponent>(ChildrenSlots);
+
+    bool bHasTagged = false;
+    bool bHasArrows = false;
+
+    for (USceneComponent* ChildSlot : ChildrenSlots)
+    {
+        if (!ChildSlot || ChildSlot == RootComponent) continue;
+        if (!SlotTag.IsNone() && ChildSlot->ComponentHasTag(SlotTag))
+        {
+            bHasTagged = true;
+            break;
+        }
+    }
+
+    if (!bHasTagged)
+    {
+        TArray<UArrowComponent*> Arrows;
+        const_cast<ABunkerBase*>(this)->GetComponents<UArrowComponent>(Arrows);
+        bHasArrows = (Arrows.Num() > 0);
+    }
+
+    if (!bHasTagged && !(bFallbackUseAllArrowChildren && bHasArrows))
+    {
+        Context.AddError(FText::FromString(TEXT("Bunker has no tagged slot components and fallback is disabled (or no Arrow children found).")));
+        return EDataValidationResult::Invalid;
+    }
+
+    if (Slots.Num() == 0)
+    {
+        Context.AddWarning(FText::FromString(("Bunker Slots array is empty. Use 'Rebuild Slots From Children' or enable Auto Sync.")));
+        return EDataValidationResult::Valid;
+    }
+
+    return EDataValidationResult::Valid;
+}
+#endif // WITH_EDITOR
