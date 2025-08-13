@@ -55,6 +55,11 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Cover")
 	bool IsInCover() const { return State == ECoverState::InSlot || State == ECoverState::Approaching; }
+	
+	static FORCEINLINE float CapsuleAwareArrive(const float BaseStop, const float CapsuleRadius)
+	{
+		return BaseStop + CapsuleRadius * 0.75f;
+	}
 
 	// Quick helpers for WASD-style traversal
 	UFUNCTION(BlueprintCallable, Category="Cover") bool TraverseLeft();
@@ -158,4 +163,6 @@ private:
 	void   ApplySlotIndexPose(const FTransform& SlotTransform, const FVector& Normal);
 	void   ApplyLean(float DeltaTime, const FTransform& SlotTransform, const FVector& Normal);
 	bool   FindAdjacentFreeSlotOnCurrentBunker(int DirSign, int32& OutSlotIndex) const; // DirSign: -1=left, +1=right
+	bool QueryFloorZAtXY(const FVector2D& XY, float TopZ, float BottomZ, float& OutZ) const;
+
 };

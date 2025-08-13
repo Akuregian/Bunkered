@@ -198,17 +198,11 @@ bool UBunkerCoverComponent::ComputeCoverAlignmentTransform(const FTransform& Slo
 	// TODO: DEBUG - Remove
 	DrawDebugLine(World, Start, End, FColor::Emerald, false,5.0f, 0, 2.f);
 
-	// Try world static; fall back to visibility if needed
-	bool bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params);
-	if (!bHit)
-	{
-		DEBUG(5.0f, FColor::Magenta, TEXT("Line Trace in Compute Hug Transform hit Nadaaa.."));
-		bHit = World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params);
-	}
-
-	// Floor Z Location
-	const float FloorZ = bHit ? Hit.Location.Z : PreLoc.Z;
-
+	float FloorZ = PreLoc.Z;
+	float OutZ;
+	if (QueryFloorZAtXY(FVector2D(PreLoc.X, PreLoc.Y), PreLoc.Z + FloorSnapUp, PreLoc.Z - FloorSnapDown, OutZ))
+		FloorZ = OutZ;
+	
 	// Treat slot Z as the desired capsule-center height,
 	// but never go below floor + HalfHeight(=44) + padding.
 	constexpr float DesiredHalfHeight = 44.f;        // you said all players use 44.f
@@ -483,7 +477,6 @@ void UBunkerCoverComponent::ExitCover()
 	SelectionPolicy = ECoverSelectionPolicy::Global;
 	bIsTransitionActive = false;
 	TransitionElapsed = 0.f;
-	//PendingSlot = INDEX_NONE;
 }
 
 bool UBunkerCoverComponent::TraverseBestSlotOnCurrentBunker(int32 /*DesiredIndex*/)
@@ -543,6 +536,23 @@ bool UBunkerCoverComponent::FindAdjacentFreeSlotOnCurrentBunker(int DirSign, int
 	return OutSlotIndex != INDEX_NONE;
 }
 
+bool UBunkerCoverComponent::QueryFloorZAtXY(const FVector2D& XY, float TopZ, float BottomZ, float& OutZ) const
+{
+	UWorld* W = GetWorld(); if (!W) return false;
+	FHitResult Hit;
+	FCollisionQueryParams P(SCENE_QUERY_STAT(CoverFloorQuery), false, GetOwner());
+	if (CurrentBunker.IsValid()) P.AddIgnoredActor(CurrentBunker.Get());
+
+	const FVector Start(XY.X, XY.Y, TopZ);
+	const FVector End  (XY.X, XY.Y, BottomZ);
+
+	bool bHit = W->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, P);
+	if (!bHit) bHit = W->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, P);
+
+	if (bHit && Hit.ImpactNormal.Z >= 0.5f) { OutZ = Hit.Location.Z; return true; }
+	return false;
+}
+
 bool UBunkerCoverComponent::TraverseLeft()
 {
 	SelectionPolicy = ECoverSelectionPolicy::SameBunkerOnly;
@@ -569,6 +579,7 @@ void UBunkerCoverComponent::ApplySlotIndexPose(const FTransform& SlotTransform, 
 void UBunkerCoverComponent::ApplyLean(float DeltaTime, const FTransform& /*SlotXf*/, const FVector& /*Normal*/)
 {
 	if (State == ECoverState::None) return;
+	
 	ACharacter* Char = Cast<ACharacter>(GetOwner()); if (!Char) return;
 
 	if (UCapsuleComponent* Cap = Char->GetCapsuleComponent())
@@ -601,74 +612,35 @@ void UBunkerCoverComponent::ApplyLean(float DeltaTime, const FTransform& /*SlotX
 void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorComponentTickFunction*)
 {
 	if (State == ECoverState::None) return;
+	
+	ACharacter* Char = Cast<ACharacter>(GetOwner());
+	if (!Char) { ExitCover(); return; }
 
-	FTransform SlotXf; FVector Normal;
-	if (!ResolveCurrentSlotTransform(SlotXf, Normal)) { ExitCover(); return; }
-
-	ACharacter* Char = Cast<ACharacter>(GetOwner()); if (!Char) { ExitCover(); return; }
-
-	// -- Approach phase (Nudge or Nav) --
+	// 1) Handle approach first — no need to resolve slot yet
 	if (State == ECoverState::Approaching)
 	{
 		const FVector To = (ApproachLoc - Char->GetActorLocation());
-		const float Dist = To.Size2D();
-		float CapsuleR=42.f, CapsuleHH=88.f;
-		if (const ACharacter* C = Char)
-		{
-			if (const UCapsuleComponent* Cap = C->GetCapsuleComponent())
-			{
-				Cap->GetScaledCapsuleSize(CapsuleR, CapsuleHH);
-			}
-		}
-		const float ArriveDist = ApproachStopDistance + CapsuleR * 0.75f; // tolerant stop
-		if (Dist > ArriveDist)
-		
-		if (Dist > ApproachStopDistance)
+		float R=42.f, HH=88.f;
+		if (const UCapsuleComponent* Cap = Char->GetCapsuleComponent()) Cap->GetScaledCapsuleSize(R, HH);
+		const float ArriveDist = CapsuleAwareArrive(ApproachStopDistance, R);
+
+		if (To.Size2D() > ArriveDist)
 		{
 			if (ApproachMode == ECoverApproachMode::Nudge)
-			{
 				Char->AddMovementInput(To.GetSafeNormal2D(), ApproachMoveSpeed);
-			}
 			// Nav mode continues via SimpleMoveToLocation
-			return; // still approaching
+			return;
 		}
 
-		if (ApproachMode == ECoverApproachMode::Nav)
-		{
-			Char->GetCharacterMovement()->StopMovementImmediately();
-		}
-
-		// Blend last few centimeters into perfect hug pose
-		StartLoc = Char->GetActorLocation();
-		StartRot = Char->GetActorRotation();
-		TargetLoc = ApproachLoc;
-		TargetRot = ApproachRot;
-		TransitionElapsed = 0.f;
-		bIsTransitionActive = true;
-		DesiredLeanAxis = 0.f;
-		CurrentLean = 0.f;
-
-		// when starting a slot transition (where you set StartLoc/TargetLoc):
-		const float Dist2D = FVector::Dist2D(StartLoc, TargetLoc);
-		// @Param SlideSpeed
-		const float SlideSpeed = 1200.f; // tweak
-		SlotTransitionTime = FMath::Max(0.08f, Dist2D / SlideSpeed);
-		
-		SetInitialShoulderFromView(Normal);
-		if (CurrentBunker.IsValid() && CurrentSlot != INDEX_NONE)
-		{
-			ApplyStanceForSlot(CurrentBunker.Get(), CurrentSlot);
-		}
-		State = ECoverState::InSlot;
-
-		// Restore walking speed now that we arrived
-		if (Char->GetCharacterMovement() && SavedMaxWalkSpeed > 0.f)
-		{
-			Char->GetCharacterMovement()->MaxWalkSpeed = SavedMaxWalkSpeed;
-			SavedMaxWalkSpeed = 0.f;
-		}
+		// Arrived — stop nav, kick the short entry blend
+		if (Char->GetCharacterMovement()) Char->GetCharacterMovement()->StopMovementImmediately();
+		StartLoc = Char->GetActorLocation();  StartRot = Char->GetActorRotation();
+		TargetLoc = ApproachLoc;              TargetRot = ApproachRot;
+		TransitionElapsed = 0.f;  bIsTransitionActive = true;
+		DesiredLeanAxis = 0.f;    CurrentLean = 0.f;
+		State = ECoverState::InSlot; // we’re effectively entering the slot
 	}
-
+	
 	// -- Transition blend (slot switch or entry) --
 	if (bIsTransitionActive)
 	{
@@ -703,21 +675,18 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 		const FVector DownStart(NewXY.X, NewXY.Y, FMath::Max(StartLoc.Z, TargetLoc.Z) + FloorSnapUp);
 		const FVector DownEnd  (NewXY.X, NewXY.Y, FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown);
 
-		bool bDown = GetWorld()->LineTraceSingleByChannel(DownHit, DownStart, DownEnd, ECC_WorldStatic, DownParams);
-		if (!bDown) {
-			bDown = GetWorld()->LineTraceSingleByChannel(DownHit, DownStart, DownEnd, ECC_Visibility, DownParams);
+		float FloorZ;
+		const FVector2D XY(NewXY.X, NewXY.Y);
+		if (!QueryFloorZAtXY(XY,
+				FMath::Max(StartLoc.Z, TargetLoc.Z) + FloorSnapUp,
+				FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown,
+				FloorZ))
+		{
+			FloorZ = FMath::Min(StartLoc.Z, TargetLoc.Z) - FloorSnapDown;
 		}
-
-		float GroundZ;
-		if (bDown && DownHit.ImpactNormal.Z >= 0.5f) {      // only accept "floor-ish" hits
-			GroundZ = DownHit.Location.Z;
-		} else {
-			// Fallback guess if no floor was found this frame
-			GroundZ = FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha) - HalfHeight; // assume center ≈ prev/target; subtract half-height
-		}
-
+		
 		// 2) Clamp: stay at the slot-anchored Target Z unless that would put us below the floor
-		const float FloorClampZ = GroundZ + HalfHeight + FloorSnapPadding;
+		const float FloorClampZ = FloorZ + HalfHeight + FloorSnapPadding;
 
 		const float TargetZ = TargetLoc.Z;     // from ComputeHugTransform (slot Z clamped to ground)
 		const float NewZ    = FMath::Max(TargetZ, FloorClampZ);
@@ -730,20 +699,15 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 		{
 			DEBUG(5.0f, FColor::Green, TEXT("Reached Destination!"));
 			bIsTransitionActive = false;
-			//PendingSlot = INDEX_NONE;
 			
 			// Snap exactly to hug transform to avoid small residuals
 			ApplyCoverAlignmentTransform(NewLoc, NewRot);
 		}
 		return;
 	}
-
-	// -- Hug / Peek: camera shoulder follows lean side (simple rule) --
-	if (CachedBoom)
-	{
-		const float Side = (CurrentLean >= 0.f) ? +1.f : -1.f;
-		CachedBoom->SocketOffset = FVector(0.f, Side * CoverShoulderOffset, 0.f);
-	}
+	
+	FTransform SlotXf; FVector Normal;
+	if (!ResolveCurrentSlotTransform(SlotXf, Normal)) { ExitCover(); return; }
 
 	// Maintain base pose and apply lean
 	ApplyLean(DeltaTime, SlotXf, Normal);
@@ -760,3 +724,4 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 	}
 #endif
 }
+
