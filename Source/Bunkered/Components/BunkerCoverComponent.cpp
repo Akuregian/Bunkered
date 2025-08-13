@@ -216,7 +216,6 @@ bool UBunkerCoverComponent::ComputeHugTransform(const FTransform& SlotXf, const 
 	const float SlotCenterZ  = Slot.Z;               // Slot was computed above
 	const float FinalZ       = FMath::Max(SlotCenterZ, FloorCenterZ);
 	
-
 	OutLoc = FVector(PreLoc.X, PreLoc.Y, FinalZ);
 	OutRot = FaceRot;
 
@@ -239,7 +238,16 @@ void UBunkerCoverComponent::PlaceAtHugTransform(const FVector& Loc, const FRotat
 		Char->SetActorLocation(Char->GetActorLocation() - PushBack, /*bSweep=*/false);
 	}
 
-	BaseLoc = Loc; BaseRot = Rot;
+	BaseLoc = Loc;
+	BaseRot = Rot;
+	
+	// NEW: remember the half-height used for this base
+	if (UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+	{
+		float R, HH;
+		Cap->GetScaledCapsuleSize(R, HH);
+		BaseHalfHeight = HH;
+	}
 }
 
 void UBunkerCoverComponent::SetInitialShoulderFromView(const FVector& SlotNormal)
@@ -581,6 +589,19 @@ void UBunkerCoverComponent::ApplyLean(float DeltaTime, const FTransform& /*SlotX
 	if (State == ECoverState::None) return;
 	ACharacter* Char = Cast<ACharacter>(GetOwner()); if (!Char) return;
 
+	if (UCapsuleComponent* Cap = Char->GetCapsuleComponent())
+	{
+		float R, HH;
+		Cap->GetScaledCapsuleSize(R, HH);
+		if (!FMath::IsNearlyEqual(HH, BaseHalfHeight))
+		{
+			// Shift center so the feet stay on the same floor
+			const float Delta = HH - BaseHalfHeight; // negative when crouching
+			BaseLoc.Z += Delta;
+			BaseHalfHeight = HH;
+		}
+	}
+
 	// Smooth the lean
 	CurrentLean = FMath::FInterpTo(CurrentLean, DesiredLeanAxis, DeltaTime, LeanSpeed);
 
@@ -722,12 +743,11 @@ void UBunkerCoverComponent::TickComponent(float DeltaTime, ELevelTick, FActorCom
 			GroundZ = DownHit.Location.Z;
 		} else {
 			// Fallback guess if no floor was found this frame
-			GroundZ = FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha) - 44.f; // assume center ≈ prev/target; subtract half-height
+			GroundZ = FMath::Lerp(StartLoc.Z, TargetLoc.Z, Alpha) - HalfHeight; // assume center ≈ prev/target; subtract half-height
 		}
 
 		// 2) Clamp: stay at the slot-anchored Target Z unless that would put us below the floor
-		constexpr float DesiredHalfHeight = 44.f;
-		const float FloorClampZ = GroundZ + DesiredHalfHeight + FloorSnapPadding;
+		const float FloorClampZ = GroundZ + HalfHeight + FloorSnapPadding;
 
 		const float TargetZ = TargetLoc.Z;     // from ComputeHugTransform (slot Z clamped to ground)
 		const float NewZ    = FMath::Max(TargetZ, FloorClampZ);

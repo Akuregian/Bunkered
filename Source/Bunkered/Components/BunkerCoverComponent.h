@@ -52,7 +52,7 @@ public:
 	void SetLeanAxis(float Axis);
 
 	UFUNCTION(BlueprintPure, Category="Cover")
-	bool IsInCover() const { return State != ECoverState::None; }
+	bool IsInCover() const { return State == ECoverState::Hug || State == ECoverState::Approach; }
 
 	// Quick helpers for WASD-style traversal
 	UFUNCTION(BlueprintCallable, Category="Cover") bool TraverseLeft();
@@ -69,6 +69,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Cover|Select")
 	bool CoverSuggestConfirm(); // EnterCover(selected)
+	
+	UFUNCTION(BlueprintCallable, Category="Cover")
+	ECoverState GetCurrentCoverState() { return State; };
 
 protected:
 	virtual void BeginPlay() override;
@@ -102,7 +105,10 @@ private:
 	// Cached base pose at Hug (lean is applied relative to this)
 	FVector  BaseLoc = FVector::ZeroVector;
 	FRotator BaseRot = FRotator::ZeroRotator;
-
+	
+	// Track the capsule half-height used when BaseLoc was recorded
+	float BaseHalfHeight = 0.f;
+	
 	// Lean
 	float DesiredLeanAxis = 0.f;
 	float CurrentLean     = 0.f;
