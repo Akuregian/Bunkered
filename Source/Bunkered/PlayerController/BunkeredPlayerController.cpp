@@ -95,14 +95,8 @@ void ABunkeredPlayerController::OnMoveSlotRight()
     }
 }
 
-// TODO: Add Slot Peeking using IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
-//void ABunkeredPlayerController::OnPeekLeft_Pressed()
-//{
-//    if (UObject* P = GetPawnObject())
-//    {
-//        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
-//    }
-//}
+// TODO: Implement Peeking
+// IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
 
 void ABunkeredPlayerController::OnStand()
 {
@@ -117,7 +111,7 @@ void ABunkeredPlayerController::OnCrouch()
     if (UObject* P = GetPawnObject())
     {
         DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Crouch]"));
-        IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Crouch);
+        IBunkerCoverInterface::Execute_Pawn_Crouch(P, true);
     }
 }
 void ABunkeredPlayerController::OnProne()

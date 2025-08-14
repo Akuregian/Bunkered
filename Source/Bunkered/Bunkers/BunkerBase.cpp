@@ -150,8 +150,7 @@ EDataValidationResult ABunkerBase::IsDataValid(FDataValidationContext& Context) 
     if (Slots.Num() == 0)
     {
         Context.AddWarning(FText::FromString(TEXT(
-            "Bunker has no slots. Add Arrow Components or click 'Rebuild Slots From Children'."
-        )));
+            "Bunker has no slots. Add Arrow Components or then click 'Rebuild Slots From Children'." )));
     }
     return EDataValidationResult::Valid;
 }

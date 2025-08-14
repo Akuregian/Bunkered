@@ -279,6 +279,11 @@ void ABunkeredCharacter::Pawn_MouseLook_Implementation(FVector2D Look)
     DoLook(Look.X, Look.Y);
 }
 
+void ABunkeredCharacter::Pawn_Crouch_Implementation(bool bCrouching)
+{
+    DoCrouchToggle();
+}
+
 // ===== Optional helpers =====
 void ABunkeredCharacter::DoMove(float Right, float Forward)
 {
@@ -313,9 +318,16 @@ void ABunkeredCharacter::DoLook(float Yaw, float Pitch)
 
 void ABunkeredCharacter::DoCrouchToggle()
 {
-    DEBUG(5.0f, FColor::Yellow, TEXT("DoCrouchToggle"));
-    if (GetCharacterMovement()->IsCrouching()) { UnCrouch(); }
-    else                                        { Crouch();  }
+    if (GetCharacterMovement()->IsCrouching())
+    {
+        DEBUG(5.0f, FColor::Green, TEXT("[Un-Crouch]"));
+        UnCrouch();
+    }
+    else
+    {
+        DEBUG(5.0f, FColor::Green, TEXT("[Crouch]"));
+        Crouch();
+    }
 }
 
 bool ABunkeredCharacter::Nav_UpdateSuggestion()

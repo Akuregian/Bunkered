@@ -40,5 +40,9 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Pawn|Input")
 	void Pawn_MouseLook(FVector2D Look);
+	
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category="Pawn|Input")
+	void Pawn_Crouch(bool bCrouching);
+	
 };
 
