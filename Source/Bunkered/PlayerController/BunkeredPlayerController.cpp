@@ -36,66 +36,8 @@ void ABunkeredPlayerController::SetupInputComponent()
     {
         if (MoveAction) EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ABunkeredPlayerController::OnMove);
         if (LookAction) EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABunkeredPlayerController::OnLook);
-
-        if (ToggleCoverAction)    EIC->BindAction(ToggleCoverAction,    ETriggerEvent::Started, this, &ABunkeredPlayerController::OnEnterSlotOnBunker);
-        if (MoveSlotLeftAction)   EIC->BindAction(MoveSlotLeftAction,   ETriggerEvent::Started, this, &ABunkeredPlayerController::OnMoveSlotLeft);
-        if (MoveSlotRightAction)  EIC->BindAction(MoveSlotRightAction,  ETriggerEvent::Started, this, &ABunkeredPlayerController::OnMoveSlotRight);
-
-        if (PeekLeftAction)
-        {
-            EIC->BindAction(PeekLeftAction,  ETriggerEvent::Started,  this, &ABunkeredPlayerController::OnPeekLeft_Pressed);
-            EIC->BindAction(PeekLeftAction,  ETriggerEvent::Completed,this, &ABunkeredPlayerController::OnPeekLeft_Released);
-        }
-        if (PeekRightAction)
-        {
-            EIC->BindAction(PeekRightAction, ETriggerEvent::Started,  this, &ABunkeredPlayerController::OnPeekRight_Pressed);
-            EIC->BindAction(PeekRightAction, ETriggerEvent::Completed,this, &ABunkeredPlayerController::OnPeekRight_Released);
-        }
-        if (PeekOverAction)
-        {
-            EIC->BindAction(PeekOverAction,  ETriggerEvent::Started,  this, &ABunkeredPlayerController::OnPeekOver_Pressed);
-            EIC->BindAction(PeekOverAction,  ETriggerEvent::Completed,this, &ABunkeredPlayerController::OnPeekOver_Released);
-        }
-
-        if (StandAction)  EIC->BindAction(StandAction,  ETriggerEvent::Started, this, &ABunkeredPlayerController::OnStand);
+        if (EnterSlotOnBunkerAction)    EIC->BindAction(EnterSlotOnBunkerAction,    ETriggerEvent::Started, this, &ABunkeredPlayerController::OnEnterSlotOnBunker);
         if (CrouchAction) EIC->BindAction(CrouchAction, ETriggerEvent::Started, this, &ABunkeredPlayerController::OnCrouch);
-        if (ProneAction)  EIC->BindAction(ProneAction,  ETriggerEvent::Started, this, &ABunkeredPlayerController::OnProne);
-        if (SuggestAction)          EIC->BindAction(SuggestAction,          ETriggerEvent::Started, this, &ABunkeredPlayerController::OnSuggest);
-        if (AcceptSuggestionAction) EIC->BindAction(AcceptSuggestionAction, ETriggerEvent::Started, this, &ABunkeredPlayerController::OnAccept);
-
-    }
-}
-
-void ABunkeredPlayerController::OnSuggest()
-{
-    if (AActor* A = Cast<AActor>(GetPawnObject()))
-    {
-        if (UActorComponent* C = A->GetComponentByClass(UBunkerAdvisorComponent::StaticClass()))
-        {
-            if (auto* Adv = Cast<UBunkerAdvisorComponent>(C))
-            {
-                Adv->UpdateSuggestion();
-            }
-        }
-    }
-}
-
-void ABunkeredPlayerController::OnAccept()
-{
-    if (AActor* A = Cast<AActor>(GetPawnObject()))
-    {
-        if (UActorComponent* C = A->GetComponentByClass(UBunkerAdvisorComponent::StaticClass()))
-        {
-            if (auto* Adv = Cast<UBunkerAdvisorComponent>(C))
-            {
-                // Ensure we have a suggestion, then accept it
-                if (!Adv->UpdateSuggestion() || !Adv->AcceptSuggestion())
-                {
-                    // (Optional) fall back to your old nearest-enter flow via interface if you keep it
-                    DEBUG(3.f, FColor::Yellow, TEXT("No next bunker available."));
-                }
-            }
-        }
     }
 }
 
@@ -119,35 +61,28 @@ void ABunkeredPlayerController::OnLook(const FInputActionValue& Value)
 
 void ABunkeredPlayerController::OnEnterSlotOnBunker()
 {
-    if (UObject* P = GetPawnObject())
+    if (AActor* PawnActor = Cast<AActor>(GetPawnObject()))
     {
-        // 1) Try advisor: suggest then accept
-        AActor* ActorPawn = Cast<AActor>(P);
-        if (ActorPawn)
+        if (UBunkerAdvisorComponent* Adv = PawnActor->FindComponentByClass<UBunkerAdvisorComponent>())
         {
-            if (UActorComponent* C = ActorPawn->GetComponentByClass(UBunkerAdvisorComponent::StaticClass()))
+            // If no suggestion or player wants to override, update first
+            Adv->UpdateSuggestion();
+            if (Adv->AcceptSuggestion())
             {
-                if (auto* Nav = Cast<UBunkerAdvisorComponent>(C))
-                {
-                    // If we don't already have a suggestion, compute one:
-                    Nav->UpdateSuggestion();
-                    if (Nav->AcceptSuggestion())
-                    {
-                        DEBUG(3.0f, FColor::Cyan, TEXT("Accepting bunker suggestion"));
-                        return;
-                    }
-                }
+                DEBUG(3.0f, FColor::Cyan, TEXT("Moving to suggested bunker slot"));
+                return;
             }
         }
-        
-        // 2) Fallback: old "enter nearest" behavior
-        IBunkerCoverInterface::Execute_EnterSlotOnBunker(P);
+
+        // Fallback: enter nearest cover
+        IBunkerCoverInterface::Execute_EnterSlotOnBunker(PawnActor);
     }
 }
 void ABunkeredPlayerController::OnMoveSlotLeft()
 {
     if (UObject* P = GetPawnObject())
     {
+        DEBUG(3.0f, FColor::Orange, TEXT("Left Slot Transition <----"));
         IBunkerCoverInterface::Execute_SlotTransition(P, -1);
     }
 }
@@ -155,57 +90,25 @@ void ABunkeredPlayerController::OnMoveSlotRight()
 {
     if (UObject* P = GetPawnObject())
     {
+        DEBUG(3.0f, FColor::Emerald, TEXT("Right Slot Transition ---->"));
         IBunkerCoverInterface::Execute_SlotTransition(P, +1);
     }
 }
 
-void ABunkeredPlayerController::OnPeekLeft_Pressed()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
-    }
-}
-void ABunkeredPlayerController::OnPeekLeft_Released()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, false);
-    }
-}
-void ABunkeredPlayerController::OnPeekRight_Pressed()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Right, true);
-    }
-}
-void ABunkeredPlayerController::OnPeekRight_Released()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Right, false);
-    }
-}
-void ABunkeredPlayerController::OnPeekOver_Pressed()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Over, true);
-    }
-}
-void ABunkeredPlayerController::OnPeekOver_Released()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Over, false);
-    }
-}
+// TODO: Add Slot Peeking using IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
+//void ABunkeredPlayerController::OnPeekLeft_Pressed()
+//{
+//    if (UObject* P = GetPawnObject())
+//    {
+//        IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
+//    }
+//}
 
 void ABunkeredPlayerController::OnStand()
 {
     if (UObject* P = GetPawnObject())
     {
+        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Stand]"));
         IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Stand);
     }
 }
@@ -213,7 +116,7 @@ void ABunkeredPlayerController::OnCrouch()
 {
     if (UObject* P = GetPawnObject())
     {
-        DEBUG(5.0f, FColor::Green, TEXT("Crouching"));
+        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Crouch]"));
         IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Crouch);
     }
 }
@@ -221,6 +124,7 @@ void ABunkeredPlayerController::OnProne()
 {
     if (UObject* P = GetPawnObject())
     {
+        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Prone]"));
         IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Prone);
     }
 }

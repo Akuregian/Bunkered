@@ -19,7 +19,8 @@ public class Bunkered : ModuleRules
 			"GameplayStateTreeModule",
 			"UMG",
 			"SmartObjectsModule",
-			"GameplayBehaviorSmartObjectsModule"
+			"GameplayBehaviorSmartObjectsModule", 
+			"UnrealEd"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

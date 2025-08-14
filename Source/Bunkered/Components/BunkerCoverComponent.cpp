@@ -22,6 +22,7 @@ void UBunkerCoverComponent::BeginPlay()
 void UBunkerCoverComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+    
     DOREPLIFETIME(UBunkerCoverComponent, CurrentBunker);
     DOREPLIFETIME(UBunkerCoverComponent, CurrentSlotIndex);
     DOREPLIFETIME(UBunkerCoverComponent, Stance);

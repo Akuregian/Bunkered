@@ -140,14 +140,14 @@ bool UBunkerAdvisorComponent::AcceptSuggestion()
     return true;
 }
 
+/* Sets the next suggest bunker manually */
 void UBunkerAdvisorComponent::SetManualSuggestion(ABunkerBase* Bunker, int32 SlotIndex)
 {
     bManualOverride = (Bunker != nullptr && SlotIndex != INDEX_NONE);
+    
     SuggestedCandidate.Bunker = Bunker;
     SuggestedCandidate.SlotIndex = SlotIndex;
-    SuggestedCandidate.SlotTransform = (Bunker && SlotIndex != INDEX_NONE)
-        ? Bunker->GetSlotWorldTransform(SlotIndex)
-        : FTransform::Identity;
+    SuggestedCandidate.SlotTransform = (Bunker && SlotIndex != INDEX_NONE) ? Bunker->GetSlotWorldTransform(SlotIndex) : FTransform::Identity;
 
     if (bManualOverride)
     {
