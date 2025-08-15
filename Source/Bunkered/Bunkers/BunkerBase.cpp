@@ -6,6 +6,11 @@
 #include "Engine/Engine.h"
 #include "Misc/DataValidation.h"
 
+#if WITH_EDITOR
+#include "Components/ArrowComponent.h"
+#include "ScopedTransaction.h"
+#endif
+
 ABunkerBase::ABunkerBase()
 {
     Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -61,8 +66,6 @@ FTransform ABunkerBase::GetSlotWorldTransform(int32 SlotIndex) const
     return Slot.LocalAnchor * GetActorTransform();
 }
 
-#if WITH_EDITOR
-
 static void LogEditorNote(const FString& Msg)
 {
 #if !NO_LOGGING
@@ -78,27 +81,9 @@ void ABunkerBase::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
 
-    // 1) Optional: auto-tag Arrow children so designers don’t forget
-    if (bAutoTagArrowChildren)
-    {
-        TArray<UArrowComponent*> Arrows;
-        GetComponents<UArrowComponent>(Arrows);
-        for (UArrowComponent* Arrow : Arrows)
-        {
-            if (!Arrow) continue;
-            if (!SlotTag.IsNone() && !Arrow->ComponentHasTag(SlotTag))
-            {
-                Arrow->ComponentTags.Add(SlotTag);
-            }
-        }
-    }
-
-    // 2) Auto-sync slots array from tagged children
-    if (bAutoSyncSlotsFromChildren)
-    {
-        RebuildSlotsFromChildren();
-    }
+    RebuildSlotsFromChildren(); // always rebuild from Arrow children
 }
+
 
 void ABunkerBase::TagAllArrowChildrenAsSlots()
 {
@@ -119,114 +104,54 @@ void ABunkerBase::TagAllArrowChildrenAsSlots()
     LogEditorNote(FString::Printf(TEXT("[Bunker] Tagged %d Arrow component(s) with %s"), Tagged, *SlotTag.ToString()));
 }
 
+#if WITH_EDITOR
 void ABunkerBase::RebuildSlotsFromChildren()
 {
-    TArray<USceneComponent*> ChildrenSlots;
-    GetComponents<USceneComponent>(ChildrenSlots);
+    UE_LOG(LogTemp, Warning, TEXT("[Bunker] Rebuilding slots from arrow components only."));
 
-    TArray<FCoverSlot> NewSlots;
-    bool bFoundTagged = false;
+    Slots.Empty();
 
-    // First pass: tagged components only
-    if (!SlotTag.IsNone())
+    // Find all ArrowComponents on this actor
+    TArray<UArrowComponent*> Arrows;
+    GetComponents<UArrowComponent>(Arrows);
+
+    if (Arrows.Num() == 0)
     {
-        for (USceneComponent* ChildSlot : ChildrenSlots)
-        {
-            if (!ChildSlot || ChildSlot == RootComponent) continue;
-            if (ChildSlot->ComponentHasTag(SlotTag))
-            {
-                bFoundTagged = true;
-
-                FCoverSlot S;
-                S.SlotPoint.OtherActor = this;               // resolve on self
-                S.SlotPoint.ComponentProperty = ChildSlot->GetFName();
-                S.bUseComponentTransform = true;
-
-                // Sensible defaults (tweak as needed)
-                S.AllowedStances = { ECoverStance::Crouch };
-                S.AllowedPeeks   = {};    // empty = all peeks allowed
-                S.EntryRadius    = 75.f;
-                S.SlotName       = ChildSlot->GetFName();
-
-                NewSlots.Add(S);
-            }
-        }
+        UE_LOG(LogTemp, Warning, TEXT("[Bunker] No ArrowComponents found, cannot create slots."));
+        return;
     }
 
-    // Fallback: if none tagged but allowed to fallback, harvest all Arrow children
-    if (!bFoundTagged && bFallbackUseAllArrowChildren)
+    for (UArrowComponent* Arrow : Arrows)
     {
-        TArray<UArrowComponent*> Arrows;
-        GetComponents<UArrowComponent>(Arrows);
-        for (UArrowComponent* Arrow : Arrows)
-        {
-            if (!Arrow) continue;
+        if (!Arrow || Arrow == RootComponent) continue;
 
-            FCoverSlot S;
-            S.SlotPoint.OtherActor = this;
-            S.SlotPoint.ComponentProperty = Arrow->GetFName();
-            S.bUseComponentTransform = true;
+        FCoverSlot NewSlot;
+        NewSlot.SlotName = Arrow->GetFName();
 
-            S.AllowedStances = { ECoverStance::Crouch };
-            S.AllowedPeeks   = {};
-            S.EntryRadius    = 75.f;
-            S.SlotName       = Arrow->GetFName();
+        // Properly set FComponentReference to point to this Arrow
+        NewSlot.SlotPoint.OtherActor = this;
+        NewSlot.SlotPoint.ComponentProperty = Arrow->GetFName();
+        NewSlot.bUseComponentTransform = true;
 
-            NewSlots.Add(S);
-        }
+        NewSlot.LocalAnchor = FTransform::Identity;
+        Slots.Add(NewSlot);
 
-        if (Arrows.Num() > 0)
-        {
-            LogEditorNote(TEXT("[Bunker] No tagged components; harvested all Arrow children as slots (fallback)."));
-        }
+        UE_LOG(LogTemp, Warning, TEXT("[Bunker] Added slot from arrow: %s"), *Arrow->GetName());
     }
 
-    Slots = MoveTemp(NewSlots);
-
-    if (Slots.Num() == 0)
-    {
-        LogEditorNote(TEXT("[Bunker] No slot sources found. Add child ArrowComponents and tag them with CoverSlot, or enable fallback/auto-tag."));
-    }
+    UE_LOG(LogTemp, Warning, TEXT("[Bunker] Rebuild complete: %d slots created."), Slots.Num());
 }
+#endif
 
+#if WITH_EDITOR
 EDataValidationResult ABunkerBase::IsDataValid(FDataValidationContext& Context) const
 {
-    // Validate that the bunker will produce usable slots
-    TArray<USceneComponent*> ChildrenSlots;
-    const_cast<ABunkerBase*>(this)->GetComponents<USceneComponent>(ChildrenSlots);
-
-    bool bHasTagged = false;
-    bool bHasArrows = false;
-
-    for (USceneComponent* ChildSlot : ChildrenSlots)
-    {
-        if (!ChildSlot || ChildSlot == RootComponent) continue;
-        if (!SlotTag.IsNone() && ChildSlot->ComponentHasTag(SlotTag))
-        {
-            bHasTagged = true;
-            break;
-        }
-    }
-
-    if (!bHasTagged)
-    {
-        TArray<UArrowComponent*> Arrows;
-        const_cast<ABunkerBase*>(this)->GetComponents<UArrowComponent>(Arrows);
-        bHasArrows = (Arrows.Num() > 0);
-    }
-
-    if (!bHasTagged && !(bFallbackUseAllArrowChildren && bHasArrows))
-    {
-        Context.AddError(FText::FromString(TEXT("Bunker has no tagged slot components and fallback is disabled (or no Arrow children found).")));
-        return EDataValidationResult::Invalid;
-    }
-
+    // Don’t hard-fail. A bunker can exist without slots; just warn designers.
     if (Slots.Num() == 0)
     {
-        Context.AddWarning(FText::FromString(("Bunker Slots array is empty. Use 'Rebuild Slots From Children' or enable Auto Sync.")));
-        return EDataValidationResult::Valid;
+        Context.AddWarning(FText::FromString(TEXT(
+            "Bunker has no slots. Add Arrow Components or then click 'Rebuild Slots From Children'." )));
     }
-
     return EDataValidationResult::Valid;
 }
-#endif // WITH_EDITOR
+#endif
