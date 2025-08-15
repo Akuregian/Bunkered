@@ -1,116 +1,71 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
+// Bunkers/BunkerBase.h
 #pragma once
-
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "SmartObjectComponent.h"
+#include "Types/CoverTypes.h"
 #include "BunkerBase.generated.h"
-
-class UBunkerMetaData;
-
-/*
- * Base class for all bunkers in the game
- * they should all derive from this class.
- */
-
-class USplineComponent;
-class UBoxComponent;
-
-USTRUCT(BlueprintType)
-struct FBunkerCoverSlot {
-	GENERATED_BODY()
-	/** Assign a child SceneComponent (e.g., ArrowComponent) in the editor to mark this slot. */
-	UPROPERTY(EditInstanceOnly, Category="Cover Slot")
-	TObjectPtr<USceneComponent> SlotPoint = nullptr;
-
-	/** Right-side or left-side orientation (designer semantics only). */
-	UPROPERTY(EditAnywhere, Category="Cover Slot")
-	bool bRightSide = false;
-
-	/** Designer label to help you identify in the editor. */
-	UPROPERTY(EditAnywhere, Category="Cover Slot")
-	FName SlotName = NAME_None;
-
-	/** If true, someone is occupying this slot (temporary until SmartObjects hook-up). */
-	UPROPERTY(VisibleAnywhere, Category="Runtime")
-	bool bOccupied = false;
-
-	/** Lateral peek offset (in cm) applied during lean checks (for future use). */
-	UPROPERTY(EditAnywhere, Category="Cover Slot", meta=(ClampMin="0.0", UIMin="0.0"))
-	float PeekLateral = 35.f;
-
-	/** Vertical peek offset (in cm) applied during head peeks (for future use). */
-	UPROPERTY(EditAnywhere, Category="Cover Slot", meta=(ClampMin="0.0", UIMin="0.0"))
-	float PeekVertical = 15.f;
-};
 
 UCLASS(Blueprintable)
 class BUNKERED_API ABunkerBase : public AActor
 {
-	GENERATED_BODY()
-	
-public:	
-	// Sets default values for this actor's properties
-	ABunkerBase();
-	
-	// ---- Accessors ----
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	int32 GetSlotCount() const { return Slots.Num(); }
-
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	bool IsSlotOccupied(int32 Index) const;
-
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	FTransform GetSlotWorldTransform(int32 Index) const;
-
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	FVector GetSlotNormal(int32 Index) const;
-
-	/** Try to claim a slot. Returns false if invalid or already occupied. */
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	bool TryClaimSlot(int32 Index, AActor* Claimant);
-
-	/** Release a claimed slot (no validation yet). */
-	UFUNCTION(BlueprintCallable, Category="Bunker")
-	void ReleaseSlot(int32 Index, AActor* Claimant);
-
-	/** For quick testing: finds the nearest free slot to a given point. Returns -1 if none. */
-	int32 FindNearestFreeSlot(const FVector& FromLocation, float MaxDist = 5000.f) const;
-
-protected:
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-#if WITH_EDITOR
-	virtual void OnConstruction(const FTransform& Transform) override;
-#endif
-
-private:
-	UPROPERTY(VisibleAnywhere, Category="Components")
-	TObjectPtr<USceneComponent> RootSceneComponent;
-
-	UPROPERTY(EditAnywhere, Category="Components")
-	TObjectPtr<UStaticMeshComponent> BunkerMesh;
+    GENERATED_BODY()
 
 public:
-	/** Place child SceneComponents (e.g., ArrowComponents) and assign them here. */
-	UPROPERTY(EditAnywhere, Category="Bunker")
-	TArray<FBunkerCoverSlot> Slots;
+    ABunkerBase();
 
-	/** Toggle to visualize slot positions/normals in PIE. */
-	UPROPERTY(EditAnywhere, Category="Debug")
-	bool bDrawDebug = true;
+    UFUNCTION(BlueprintCallable, Category="Cover")
+    int32 FindClosestValidSlot(const FVector& WorldLocation, float MaxDist, int32& OutExactIndex) const;
 
-	/** Color for free/occupied slots. */
-	UPROPERTY(EditAnywhere, Category="Debug")
-	FColor FreeColor = FColor::Green;
-	UPROPERTY(EditAnywhere, Category="Debug")
-	FColor OccupiedColor = FColor::Red;
+    UFUNCTION(BlueprintCallable, Category="Cover")
+    FTransform GetSlotWorldTransform(int32 SlotIndex) const;
 
-	/** How long to keep lines in the world (0 = one frame). */
-	UPROPERTY(EditAnywhere, Category="Debug")
-	float DebugDuration = 0.f;
+    UFUNCTION(BlueprintCallable, Category="Cover")
+    const FCoverSlot& GetSlot(int32 SlotIndex) const { return Slots[SlotIndex]; }
 
-	void DrawDebug() const;
+    UFUNCTION(BlueprintCallable, Category="Cover")
+    int32 GetNumSlots() const { return Slots.Num(); }
 
+#if WITH_EDITOR
+    /** Scans child components with SlotTag and rebuilds Slots to reference them. */
+    UFUNCTION(CallInEditor, Category="Cover|Authoring")
+    void RebuildSlotsFromChildren();
+
+    /** Adds SlotTag to all Arrow children (non-destructive; only adds if missing). */
+    UFUNCTION(CallInEditor, Category="Cover|Authoring")
+    void TagAllArrowChildrenAsSlots();
+#endif
+
+protected:
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+    USceneComponent* Root;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+    UStaticMeshComponent* Bunker;
+
+    /** Designer-authored cover slots (may reference child components). */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Cover")
+    TArray<FCoverSlot> Slots;
+    
+    /** If true, OnConstruction will auto-rebuild slots from tagged children. */
+    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
+    bool bAutoSyncSlotsFromChildren = true;
+
+    /** Tag used to identify child components that should act as slots. */
+    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
+    FName SlotTag = TEXT("CoverSlot");
+
+    /** If no tagged components are found, also harvest ALL Arrow children as slots. */
+    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
+    bool bFallbackUseAllArrowChildren = true;
+
+    /** Also auto-tag any Arrow children that are missing the tag. */
+    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
+    bool bAutoTagArrowChildren = true;
+
+#if WITH_EDITOR
+    virtual void OnConstruction(const FTransform& Transform) override;
+
+    /** Editor data validation hook (Window → Developer Tools → Data Validation). */
+    virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
+#endif
 };
