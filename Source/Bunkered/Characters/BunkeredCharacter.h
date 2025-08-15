@@ -51,7 +51,7 @@ protected:
     virtual void SlotPeek_Implementation(EPeekDirection Direction, bool bPressed) override;
     virtual void Pawn_Movement_Implementation(FVector2D Move) override;
     virtual void Pawn_MouseLook_Implementation(FVector2D Look) override;
-    virtual void Pawn_Crouch_Implementation(bool bCrouching) override;
+    virtual void Pawn_ChangeBunkerStance_Implementation(bool bCrouching) override;
 
     // Helper: find nearby bunker/slot (you can swap to EQS later)
     bool FindNearbyBunkerAndSlot(ABunkerBase*& OutBunker, int32& OutSlot) const;

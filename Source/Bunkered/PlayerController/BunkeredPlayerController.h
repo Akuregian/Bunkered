@@ -39,7 +39,7 @@ protected:
 
     // Cover actions
     UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* EnterSlotOnBunkerAction    = nullptr;
-    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* CrouchAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* ChangeStanceAction = nullptr;
 
 private:
     // Helpers to dispatch to the interface
@@ -47,12 +47,7 @@ private:
     void OnLook(const FInputActionValue& Value);
 
     void OnEnterSlotOnBunker();
-    void OnMoveSlotLeft();
-    void OnMoveSlotRight();
-
-    void OnStand();
-    void OnCrouch();
-    void OnProne();
+    void OnStanceChange();
 
     UObject* GetPawnObject() const { return GetPawn(); }
 };

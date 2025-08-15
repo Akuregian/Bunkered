@@ -83,6 +83,8 @@ void ABunkeredCharacter::SetupPlayerInputComponent(UInputComponent* InputComp)
 
 void ABunkeredCharacter::HandleBeginTraverseTo(ABunkerBase* TargetBunker, int32 TargetSlot)
 {
+    DEBUG(5.0f, FColor::Green, TEXT("ABunkeredCharacter::HandleBeginTraverseTo() ---- Traversing dawg"));
+    
     if (!TargetBunker) return;
     PendingBunker = TargetBunker;
     PendingSlot   = TargetSlot;
@@ -265,7 +267,11 @@ void ABunkeredCharacter::SetSlotStance_Implementation(ECoverStance Stance)
 
 void ABunkeredCharacter::SlotPeek_Implementation(EPeekDirection Direction, bool bPressed)
 {
-    if (BunkerCoverComponent) BunkerCoverComponent->SetPeek(Direction, bPressed);
+    if (BunkerCoverComponent)
+    {
+        DEBUG(5.0f, FColor::Green, TEXT("---- ABunkeredCharacter::SlotPeek_Implementation() ---"));
+        BunkerCoverComponent->SetPeek(Direction, bPressed);
+    }
 }
 
 void ABunkeredCharacter::Pawn_Movement_Implementation(FVector2D Move)
@@ -279,8 +285,10 @@ void ABunkeredCharacter::Pawn_MouseLook_Implementation(FVector2D Look)
     DoLook(Look.X, Look.Y);
 }
 
-void ABunkeredCharacter::Pawn_Crouch_Implementation(bool bCrouching)
+void ABunkeredCharacter::Pawn_ChangeBunkerStance_Implementation(bool bCrouching)
 {
+    
+    DEBUG(5.0f, FColor::Green, TEXT("IsCrouching: [%i]"), bCrouching);
     DoCrouchToggle();
 }
 
@@ -320,12 +328,10 @@ void ABunkeredCharacter::DoCrouchToggle()
 {
     if (GetCharacterMovement()->IsCrouching())
     {
-        DEBUG(5.0f, FColor::Green, TEXT("[Un-Crouch]"));
         UnCrouch();
     }
     else
     {
-        DEBUG(5.0f, FColor::Green, TEXT("[Crouch]"));
         Crouch();
     }
 }

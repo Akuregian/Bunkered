@@ -28,7 +28,7 @@ void ABunkeredPlayerController::SetupInputComponent()
     {
         for (UInputMappingContext* CurrentContext : DefaultMappingContexts)
         {
-            if (CurrentContext) Subsystem->AddMappingContext(CurrentContext, 0);
+            Subsystem->AddMappingContext(CurrentContext, 0);
         }
     }
 
@@ -36,8 +36,8 @@ void ABunkeredPlayerController::SetupInputComponent()
     {
         if (MoveAction) EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ABunkeredPlayerController::OnMove);
         if (LookAction) EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABunkeredPlayerController::OnLook);
-        if (EnterSlotOnBunkerAction)    EIC->BindAction(EnterSlotOnBunkerAction,    ETriggerEvent::Started, this, &ABunkeredPlayerController::OnEnterSlotOnBunker);
-        if (CrouchAction) EIC->BindAction(CrouchAction, ETriggerEvent::Started, this, &ABunkeredPlayerController::OnCrouch);
+        if (EnterSlotOnBunkerAction) EIC->BindAction(EnterSlotOnBunkerAction,    ETriggerEvent::Started, this, &ABunkeredPlayerController::OnEnterSlotOnBunker);
+        if (ChangeStanceAction) EIC->BindAction(ChangeStanceAction, ETriggerEvent::Started, this, &ABunkeredPlayerController::OnStanceChange);
     }
 }
 
@@ -78,47 +78,11 @@ void ABunkeredPlayerController::OnEnterSlotOnBunker()
         IBunkerCoverInterface::Execute_EnterSlotOnBunker(PawnActor);
     }
 }
-void ABunkeredPlayerController::OnMoveSlotLeft()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        DEBUG(3.0f, FColor::Orange, TEXT("Left Slot Transition <----"));
-        IBunkerCoverInterface::Execute_SlotTransition(P, -1);
-    }
-}
-void ABunkeredPlayerController::OnMoveSlotRight()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        DEBUG(3.0f, FColor::Emerald, TEXT("Right Slot Transition ---->"));
-        IBunkerCoverInterface::Execute_SlotTransition(P, +1);
-    }
-}
 
-// TODO: Implement Peeking
-// IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left, true);
-
-void ABunkeredPlayerController::OnStand()
+void ABunkeredPlayerController::OnStanceChange()
 {
     if (UObject* P = GetPawnObject())
     {
-        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Stand]"));
-        IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Stand);
-    }
-}
-void ABunkeredPlayerController::OnCrouch()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Crouch]"));
-        IBunkerCoverInterface::Execute_Pawn_Crouch(P, true);
-    }
-}
-void ABunkeredPlayerController::OnProne()
-{
-    if (UObject* P = GetPawnObject())
-    {
-        DEBUG(5.0f, FColor::Green, TEXT("Setting Slot Stance to: [Prone]"));
-        IBunkerCoverInterface::Execute_SetSlotStance(P, ECoverStance::Prone);
+        IBunkerCoverInterface::Execute_Pawn_ChangeBunkerStance(P, true);
     }
 }
