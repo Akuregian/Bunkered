@@ -3,7 +3,9 @@
 #include "Engine/LocalPlayer.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Characters/BunkeredCharacter.h"
 #include "Components/BunkerAdvisorComponent.h"
+#include "Components/PeekComponent.h"
 #include "Interface/BunkerCoverInterface.h"
 #include "Types/CoverTypes.h"
 #include "Utility/LoggingMacros.h"
@@ -38,6 +40,12 @@ void ABunkeredPlayerController::SetupInputComponent()
         if (LookAction) EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &ABunkeredPlayerController::OnLook);
         if (EnterSlotOnBunkerAction) EIC->BindAction(EnterSlotOnBunkerAction,    ETriggerEvent::Started, this, &ABunkeredPlayerController::OnEnterSlotOnBunker);
         if (ChangeStanceAction) EIC->BindAction(ChangeStanceAction, ETriggerEvent::Started, this, &ABunkeredPlayerController::OnStanceChange);
+
+        // Peeking
+        if (PeekLeftAction)  { EIC->BindAction(PeekLeftAction,  ETriggerEvent::Started,  this, &ABunkeredPlayerController::OnPeekLeftStart);
+            EIC->BindAction(PeekLeftAction,  ETriggerEvent::Completed,this, &ABunkeredPlayerController::OnPeekLeftStop); }
+        if (PeekRightAction) { EIC->BindAction(PeekRightAction, ETriggerEvent::Started,  this, &ABunkeredPlayerController::OnPeekRightStart);
+            EIC->BindAction(PeekRightAction, ETriggerEvent::Completed,this, &ABunkeredPlayerController::OnPeekRightStop); }
     }
 }
 
@@ -85,4 +93,24 @@ void ABunkeredPlayerController::OnStanceChange()
     {
         IBunkerCoverInterface::Execute_Pawn_ChangeBunkerStance(P, true);
     }
+}
+
+void ABunkeredPlayerController::OnPeekLeftStart()
+{
+    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left,  true);
+}
+
+void ABunkeredPlayerController::OnPeekLeftStop()
+{
+    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Left,  false);
+}
+
+void ABunkeredPlayerController::OnPeekRightStart()
+{
+    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Right, true);
+}
+
+void ABunkeredPlayerController::OnPeekRightStop()
+{
+    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_SlotPeek(P, EPeekDirection::Right, false);
 }

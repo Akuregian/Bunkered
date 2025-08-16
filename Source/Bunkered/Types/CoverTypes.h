@@ -18,6 +18,7 @@ enum class ECoverStance : uint8
 	Prone UMETA(DisplayName="Prone")
 };
 
+// Peek directions for the Slot
 UENUM(BlueprintType)
 enum class EPeekDirection : uint8
 {

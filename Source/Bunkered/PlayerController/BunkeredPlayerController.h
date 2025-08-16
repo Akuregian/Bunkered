@@ -38,8 +38,17 @@ protected:
     UInputAction* LookAction = nullptr;
 
     // Cover actions
-    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* EnterSlotOnBunkerAction    = nullptr;
-    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* ChangeStanceAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input")
+    UInputAction* EnterSlotOnBunkerAction = nullptr;
+    
+    UPROPERTY(EditDefaultsOnly, Category="Input")
+    UInputAction* ChangeStanceAction = nullptr;
+    
+    UPROPERTY(EditDefaultsOnly, Category="Input")
+    UInputAction* PeekLeftAction = nullptr;
+    
+    UPROPERTY(EditDefaultsOnly, Category="Input")
+    UInputAction* PeekRightAction = nullptr;
 
 private:
     // Helpers to dispatch to the interface
@@ -48,6 +57,12 @@ private:
 
     void OnEnterSlotOnBunker();
     void OnStanceChange();
+
+    // Peeking
+    void OnPeekLeftStart();
+    void OnPeekLeftStop();
+    void OnPeekRightStart();
+    void OnPeekRightStop();
 
     UObject* GetPawnObject() const { return GetPawn(); }
 };

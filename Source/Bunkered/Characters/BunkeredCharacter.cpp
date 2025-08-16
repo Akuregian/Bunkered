@@ -6,6 +6,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/BunkerAdvisorComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PeekComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/Controller.h"
@@ -52,33 +53,24 @@ ABunkeredCharacter::ABunkeredCharacter()
     // Cover component
     BunkerCoverComponent = CreateDefaultSubobject<UBunkerCoverComponent>(TEXT("BunkerCoverComponent"));
 
-    // Create & wire the BunkerAdvisorComponent if not already created elsewhere
-    if (!FindComponentByClass<UBunkerAdvisorComponent>())
-    {
-        auto* Advisor = CreateDefaultSubobject<UBunkerAdvisorComponent>(TEXT("BunkerAdvisorComponent"));
-        if (Advisor)
-        {
-            Advisor->OnBeginTraverseTo.AddDynamic(this, &ABunkeredCharacter::HandleBeginTraverseTo);
-        }
-    }
-    else
-    {
-        if (auto* Advisor = FindComponentByClass<UBunkerAdvisorComponent>())
-        {
-            Advisor->OnBeginTraverseTo.AddDynamic(this, &ABunkeredCharacter::HandleBeginTraverseTo);
-        }
-    }
+    // Bunker Advisor Component
+    BunkerAdvisorComponent = CreateDefaultSubobject<UBunkerAdvisorComponent>(TEXT("BunkerAdvisorComponent"));
+    BunkerAdvisorComponent->OnBeginTraverseTo.AddDynamic(this, &ABunkeredCharacter::HandleBeginTraverseTo);
+
+    // Bunker Peek Component
+    PeekComponent = CreateDefaultSubobject<UPeekComponent>(TEXT("PeekComponent"));
 
     // Defaults for vault tuning
     VaultProbeDistance  = 150.f;
     VaultMaxHeight      = 90.f;
     VaultForwardImpulse = 400.f;
-    VaultUpImpulse      = 300.f;}
+    VaultUpImpulse      = 300.f;
+}
 
 void ABunkeredCharacter::SetupPlayerInputComponent(UInputComponent* InputComp)
 {
     Super::SetupPlayerInputComponent(InputComp);
-    // Intentionally empty — PlayerController binds and forwards via the interface.
+    
 }
 
 void ABunkeredCharacter::HandleBeginTraverseTo(ABunkerBase* TargetBunker, int32 TargetSlot)
@@ -267,9 +259,15 @@ void ABunkeredCharacter::SetSlotStance_Implementation(ECoverStance Stance)
 
 void ABunkeredCharacter::SlotPeek_Implementation(EPeekDirection Direction, bool bPressed)
 {
+    if (PeekComponent)
+    {
+        PeekComponent->HandlePeekInput(Direction, bPressed);
+        return;
+    }
+    
+    // Fallback
     if (BunkerCoverComponent)
     {
-        DEBUG(5.0f, FColor::Green, TEXT("---- ABunkeredCharacter::SlotPeek_Implementation() ---"));
         BunkerCoverComponent->SetPeek(Direction, bPressed);
     }
 }
@@ -292,7 +290,6 @@ void ABunkeredCharacter::Pawn_ChangeBunkerStance_Implementation(bool bCrouching)
     DoCrouchToggle();
 }
 
-// ===== Optional helpers =====
 void ABunkeredCharacter::DoMove(float Right, float Forward)
 {
     // If we are in cover, traverse Left or Right

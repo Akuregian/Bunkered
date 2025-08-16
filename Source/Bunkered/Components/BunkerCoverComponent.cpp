@@ -35,9 +35,9 @@ void UBunkerCoverComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 
 bool UBunkerCoverComponent::IsStanceAllowedAtSlot(ECoverStance InStance, int32 SlotIndex) const
 {
-    if (!CurrentBunker || !CurrentBunker->GetNumSlots() || !ensure(CurrentBunker->GetNumSlots() > SlotIndex)) return false;
+    if (!CurrentBunker || !ensure(CurrentBunker->GetNumSlots() > SlotIndex)) return false;
     const FCoverSlot& Slot = CurrentBunker->GetSlot(SlotIndex);
-    return Slot.AllowedStances.Contains(InStance);
+    return Slot.AllowedStances.Num()==0 || Slot.AllowedStances.Contains(InStance);
 }
 
 bool UBunkerCoverComponent::IsPeekAllowedAtSlot(EPeekDirection InPeek, int32 SlotIndex) const
@@ -96,7 +96,6 @@ void UBunkerCoverComponent::ExitCover()
 
 bool UBunkerCoverComponent::RequestSlotMoveRelative(int32 Delta)
 {
-    DEBUG(5.0f, FColor::Black, TEXT("(1) UBunkerCoverComponent::RequestSlotMoveRelative()"));
     // return if not in cover
     if (!IsInCover() || Delta == 0) return false;
 
@@ -126,23 +125,6 @@ bool UBunkerCoverComponent::RequestSlotMoveRelative(int32 Delta)
             OnRep_StanceExposure();
             OnRep_Peek();
             
-            return true;
-        }
-        
-        // === No transition available — check for peeking instead ===
-        const FCoverSlot& Slot = CurrentBunker->GetSlot(CurrentSlotIndex);
-        EPeekDirection DesiredPeek = (Delta > 0) ? EPeekDirection::Right : EPeekDirection::Left;
-        bool bIsSnakeSlot = Slot.AllowedStances.Num() == 1 && Slot.AllowedStances[0] == ECoverStance::Prone;
-
-        // Prevent inward peeking (only allow peeking outward if we're on an end slot)
-        const bool bIsEndSlot =
-            (CurrentSlotIndex == 0 && Delta < 0) || (CurrentSlotIndex == SlotNum - 1 && Delta > 0);
-
-        // Peek if at end OR if snake-style slot
-        bool bAllowPeek = bIsEndSlot || bIsSnakeSlot;
-        if (bAllowPeek && IsPeekAllowedAtSlot(DesiredPeek, CurrentSlotIndex))
-        {
-            SetPeek(DesiredPeek, true);
             return true;
         }
     }
@@ -219,8 +201,6 @@ bool UBunkerCoverComponent::SetExposureState(EExposureState NewExposure)
 
 void UBunkerCoverComponent::SnapOwnerToSlot()
 {
-    DEBUG(5.0f, FColor::Yellow, TEXT("(2) Snapping owner to Slot: [%i]"), CurrentSlotIndex);
-    
     if (!OwnerCharacter.IsValid() || !CurrentBunker) return;
     const FTransform WT = CurrentBunker->GetSlotWorldTransform(CurrentSlotIndex);
 
@@ -237,13 +217,13 @@ void UBunkerCoverComponent::OnRep_Bunker() { }
 void UBunkerCoverComponent::OnRep_Slot()
 {
     OnSlotChanged.Broadcast(CurrentSlotIndex);
-
     DEBUG(5.0f, FColor::Magenta, TEXT("Broadcasting -> OnSlotChanged: [%i]"), CurrentSlotIndex);
 }
 void UBunkerCoverComponent::OnRep_StanceExposure()
 {
     OnStanceChanged.Broadcast(Stance, Exposure);
 
+    // ------------ Debug -------------
     const FString StanceName   = StaticEnum<ECoverStance>()
         ? StaticEnum<ECoverStance>()->GetDisplayNameTextByValue(static_cast<int64>(Stance)).ToString()
         : TEXT("Invalid");
@@ -253,66 +233,29 @@ void UBunkerCoverComponent::OnRep_StanceExposure()
 
     DEBUG(5.0f, FColor::Cyan, TEXT("[Cover] %s Stance=%s Exposure=%s"),
         *GetNameSafe(GetOwner()), *StanceName, *ExposureName);
+    // ---------- End Debug -----------
 }
+
 void UBunkerCoverComponent::OnRep_Peek()
 {
-   OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
+    OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
 
-    const FCoverSlot& Slot = CurrentBunker->GetSlot(CurrentSlotIndex);
-    FVector LocalOffset = FVector::ZeroVector; // slot-local (X fwd, Y right, Z up)
-
-    switch (Peek)
-    {
-    case EPeekDirection::Left:  LocalOffset.Y = -Slot.LateralPeekOffset; break;
-    case EPeekDirection::Right: LocalOffset.Y = +Slot.LateralPeekOffset; break;
-    case EPeekDirection::Over:  LocalOffset.Z = +Slot.VerticalPeekOffset; break;
-    default: break;
-    }
-
-    if (OwnerCharacter.IsValid())
-    {
-        // 1) Camera: shift sideways/up using SpringArm socket offset (local to arm)
-        if (USpringArmComponent* Boom = OwnerCharacter->FindComponentByClass<USpringArmComponent>())
-        {
-            // X is forward/back along arm; Y is lateral; Z is vertical for socket offset
-            const FVector SocketOffset = (Peek == EPeekDirection::None)
-                ? FVector::ZeroVector
-                : FVector(0.f, LocalOffset.Y, LocalOffset.Z);
-
-            Boom->SocketOffset = SocketOffset;
-
-            // 2) Camera lean: small roll for visual feedback
-            const float LeanRollDeg =
-                (Peek == EPeekDirection::Left)  ? -10.f :
-                (Peek == EPeekDirection::Right) ? +10.f : 0.f;
-
-            FRotator R = Boom->GetRelativeRotation();
-            R.Roll = LeanRollDeg;
-            Boom->SetRelativeRotation(R);
-        }
-
-        const FTransform SlotWT = CurrentBunker->GetSlotWorldTransform(CurrentSlotIndex);
-        const FVector WorldOffset = SlotWT.TransformVector(LocalOffset); // rotate by slot yaw
-        const FVector Target = SlotWT.GetLocation() + WorldOffset;
-
-        // Use a swept move to respect collisions
-        OwnerCharacter->SetActorLocation(Target, /*bSweep=*/true);
-    }
-
-    // ---- Debug (designer aid): Slot -> Peek line & sphere (already good) ----
+    // Designer debug: draw slot→peek guide only (keep this)
     if (CurrentBunker)
     {
+        const FCoverSlot& Slot = CurrentBunker->GetSlot(CurrentSlotIndex);
+        FVector LocalOffset = FVector::ZeroVector;
+        if (Peek == EPeekDirection::Left)  LocalOffset.Y = -Slot.LateralPeekOffset;
+        if (Peek == EPeekDirection::Right) LocalOffset.Y =  Slot.LateralPeekOffset;
+        if (Peek == EPeekDirection::Over)  LocalOffset.Z =  Slot.VerticalPeekOffset;
+
         const FTransform SlotWT = CurrentBunker->GetSlotWorldTransform(CurrentSlotIndex);
         const FVector PeekPointWS = SlotWT.TransformPosition(LocalOffset);
         const FVector SlotWS      = SlotWT.GetLocation();
-
         DrawDebugLine(GetWorld(), SlotWS, PeekPointWS, FColor::Red, false, 5.f, 0, 2.f);
         DrawDebugSphere(GetWorld(), PeekPointWS, 5.f, 12, FColor::Green, false, 5.f);
     }
-
-    DEBUG(5.0f, FColor::Emerald, TEXT("OnRep_Peek --><-- Peek=%s OffsetLocal=%s"),
-        *StaticEnum<EPeekDirection>()->GetNameStringByValue((int64)Peek),
-        *LocalOffset.ToString());}
+}
 
 // === RPC impls ===
 void UBunkerCoverComponent::Server_TryEnterCover_Implementation(ABunkerBase* Bunker, int32 SlotIndex){ TryEnterCover(Bunker, SlotIndex); }
