@@ -9,6 +9,7 @@
 #include "BunkeredCharacter.generated.h"
 
 class UBunkerAdvisorComponent;
+class UPeekComponent;
 class ABunkerBase;
 class UBunkerCoverComponent;
 class USpringArmComponent;
@@ -36,12 +37,17 @@ class BUNKERED_API ABunkeredCharacter : public ACharacter, public IBunkerCoverIn
 public:
     ABunkeredCharacter();
 
-    /** Bunker Cover Component */
+    /** Bunker Cover Component - bunker movement and cover logic */
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
     TObjectPtr<UBunkerCoverComponent> BunkerCoverComponent;
-    
+
+    /* BunkerAdvisor - Suggest optimal bunkers o traverse to */
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
     TObjectPtr<UBunkerAdvisorComponent> BunkerAdvisorComponent;
+
+    /* Peek Component - Handles all Logic for peeking */
+    UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
+    TObjectPtr<UPeekComponent> PeekComponent;
 
 protected:
     // === IBunkerCoverInterface ===
