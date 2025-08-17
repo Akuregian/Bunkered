@@ -81,7 +81,7 @@ public:
     UPROPERTY(EditAnywhere, Category="Movement|Vault") float VaultUpImpulse = 300.f;
 
     // Spline traversal tuning
-    UPROPERTY(EditAnywhere, Category="Cover") float SlideStepAlpha = 0.10f;    // per key press
+    UPROPERTY(EditAnywhere, Category="Cover") float SlideSpeedCmPerSec = 180.f;    // world-units/sec along spline
     UPROPERTY(EditAnywhere, Category="Cover") float EnterDistanceThreshold = 120.f;
     
     // Optional helpers for UI/blueprints

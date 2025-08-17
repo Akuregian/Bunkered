@@ -21,6 +21,8 @@ struct FPeekSettings {
   UPROPERTY(EditDefaultsOnly) float CameraTiltDeg = 6.f;
   UPROPERTY(EditDefaultsOnly) float MarginClearanceCm = 2.5f;
   UPROPERTY(EditDefaultsOnly) float RefractorySec = 0.12f;
+  UPROPERTY(EditDefaultsOnly) float DoubleTapWindowSec = 0.25f;
+  UPROPERTY(EditDefaultsOnly) float BurstTapMaxSec    = 0.15f;
 };
 
 USTRUCT()

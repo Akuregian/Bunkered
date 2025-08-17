@@ -49,7 +49,8 @@ public:
   // ---- Server RPCs ----
   UFUNCTION(Server, Reliable) void Server_EnterCoverAtAlpha(ABunkerBase* Bunker, float Alpha);
   UFUNCTION(Server, Reliable) void Server_ExitCover();
-  UFUNCTION(Server, Reliable) void Server_SlideAlongCover(float DeltaAlpha);
+  // Sliding is spammy (fires every input tick) so we set to UnReliable [?]
+  UFUNCTION(Server, UnReliable) void Server_SlideAlongCover(float DeltaAlpha);
   UFUNCTION(Server, Reliable) void Server_SetStance(ECoverStance NewStance);
   UFUNCTION(Server, Reliable) void Server_SetPeek(EPeekDirection Direction, bool bEnable);
   UFUNCTION(Server, Reliable) void Server_SetExposure(EExposureState NewExposure);
@@ -61,7 +62,7 @@ public:
   UPROPERTY(ReplicatedUsing=OnRep_Peek)           EPeekDirection Peek     = EPeekDirection::None;
   UPROPERTY(ReplicatedUsing=OnRep_CoverAlpha)     float          CoverAlpha = 0.f; // 0..1
 
-  // RepNotifies
+  // OnRep is meant for Clients
   UFUNCTION() void OnRep_Bunker();
   UFUNCTION() void OnRep_CoverAlpha();
   UFUNCTION() void OnRep_StanceExposure();
@@ -69,6 +70,11 @@ public:
 
 private:
   TWeakObjectPtr<ACharacter> OwnerCharacter;
+
+  // Handlers
+  void HandleCoverAlphaChanged();       // calls delegate + snaps owner
+  void HandleStanceExposureChanged();   // broadcasts stance/exposure change
+  void HandlePeekChanged();             // broadcasts peek change
 
   void SnapOwnerToCoverAlpha();
 

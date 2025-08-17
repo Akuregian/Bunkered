@@ -96,11 +96,21 @@ void ABunkeredCharacter::Cover_Exit_Implementation()
 void ABunkeredCharacter::Cover_Slide_Implementation(float Axis)
 {
     if (!BunkerCoverComponent) return;
-    const float Step = SlideStepAlpha * FMath::Clamp(Axis, -1.f, +1.f);
-    if (FMath::IsNearlyZero(Step)) return;
+    Axis = FMath::Clamp(Axis, -1.f, +1.f);
+    if (FMath::IsNearlyZero(Axis)) return;
 
-    if (HasAuthority()) BunkerCoverComponent->SlideAlongCover(Step);
-    else                BunkerCoverComponent->Server_SlideAlongCover(Step);
+    // Convert cm/s -> Δalpha using current spline length
+    float dAlpha = 0.f;
+    if (ABunkerBase* B = BunkerCoverComponent->GetCurrentBunker())
+        if (UCoverSplineComponent* S = B->GetCoverSpline())
+        {
+            const float len = FMath::Max(1.f, S->GetSplineLength()); // cm
+            dAlpha = (Axis * SlideSpeedCmPerSec * GetWorld()->GetDeltaSeconds()) / len;
+        }
+
+    if (FMath::IsNearlyZero(dAlpha)) return;
+    if (HasAuthority()) BunkerCoverComponent->SlideAlongCover(dAlpha);
+    else BunkerCoverComponent->Server_SlideAlongCover(dAlpha);
 }
 
 void ABunkeredCharacter::Cover_Peek_Implementation(EPeekDirection Direction, bool bPressed)

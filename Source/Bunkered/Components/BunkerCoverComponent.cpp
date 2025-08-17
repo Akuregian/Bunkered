@@ -79,29 +79,32 @@ bool UBunkerCoverComponent::SlideAlongCover(float DeltaAlpha)
   UCoverSplineComponent* S = CurrentBunker->GetCoverSpline();
   if (!S) return false;
 
-  if (GetOwner()->HasAuthority())
-  {
-    const float NewAlpha = S->ClampT(CoverAlpha + DeltaAlpha);
-    if (FMath::IsNearlyEqual(NewAlpha, CoverAlpha, 1e-4f)) return false;
-
-    CoverAlpha = NewAlpha;
-    // Hide while traversing; peek canceled
-    Exposure = EExposureState::Hidden;
-    Peek     = EPeekDirection::None;
-
-    Stance = S->RequiredStanceAtAlpha(CoverAlpha);
-
-    SnapOwnerToCoverAlpha();
-    OnRep_CoverAlpha();
-    OnRep_StanceExposure();
-    OnRep_Peek();
-    return true;
-  }
-  else
+  if (!GetOwner()->HasAuthority())
   {
     Server_SlideAlongCover(DeltaAlpha);
-    return true;
+    return true; // (Optional: add client prediction later)
   }
+
+  const float NewAlpha = S->ClampT(CoverAlpha + DeltaAlpha);
+  if (FMath::IsNearlyEqual(NewAlpha, CoverAlpha, 1e-4f)) return false;
+
+  const float OldAlpha = CoverAlpha;
+  CoverAlpha = NewAlpha;
+
+  // Update stance from spline (no forced exposure/peek changes here)
+  const ECoverStance NewStance = S->RequiredStanceAtAlpha(CoverAlpha);
+  if (Stance != NewStance)
+  {
+    Stance = NewStance;
+    HandleStanceExposureChanged();
+  }
+
+  HandleCoverAlphaChanged(); // broadcasts + snaps owner
+
+  // NOTE: do NOT call OnRep_* here; clients will get real OnRep via replication.
+  // Also avoid ForceNetUpdate() for every slide – thass too chatty for the server.
+
+  return true;
 }
 
 bool UBunkerCoverComponent::SetStance(ECoverStance NewStance)
@@ -208,28 +211,33 @@ void UBunkerCoverComponent::OnRep_Bunker()
 
 void UBunkerCoverComponent::OnRep_CoverAlpha()
 {
-  OnCoverAlphaChanged.Broadcast(CoverAlpha);
-  SnapOwnerToCoverAlpha();
+  HandleCoverAlphaChanged();
 }
 
 void UBunkerCoverComponent::OnRep_StanceExposure()
 {
-  OnStanceChanged.Broadcast(Stance, Exposure);
+  HandleStanceExposureChanged();
 }
 
 void UBunkerCoverComponent::OnRep_Peek()
 {
-  OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
+  HandlePeekChanged();
+}
 
-  // Debug visualize peek outward axis (optional)
-  if (CurrentBunker && CurrentBunker->GetCoverSpline())
-  {
-    const FTransform WT = CurrentBunker->GetCoverSpline()->GetWorldTransformAtAlpha(CoverAlpha);
-    const FVector P = WT.GetLocation();
-    const FVector Out = CurrentBunker->GetCoverSpline()->GetOutwardAtAlpha(CoverAlpha);
-    const float Sign = (Peek == EPeekDirection::Left) ? -1.f : (Peek == EPeekDirection::Right ? +1.f : 0.f);
-    DrawDebugLine(GetWorld(), P, P + Out * (Sign * 40.f), FColor::Red, false, 2.f, 0, 2.f);
-  }
+void UBunkerCoverComponent::HandleCoverAlphaChanged()
+{
+  OnCoverAlphaChanged.Broadcast(CoverAlpha);
+  SnapOwnerToCoverAlpha();
+}
+
+void UBunkerCoverComponent::HandleStanceExposureChanged()
+{
+  OnStanceChanged.Broadcast(Stance, Exposure);
+}
+
+void UBunkerCoverComponent::HandlePeekChanged()
+{
+  OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
 }
 
 // ----- RPC impls -----

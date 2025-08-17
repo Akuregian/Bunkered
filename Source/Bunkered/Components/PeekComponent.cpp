@@ -76,7 +76,6 @@ void UPeekComponent::RefreshAnchorFromCoverAlpha(float NewAlpha)
           Server_StopPeek();
         }
       }
-      
     }
   }
 }
@@ -127,7 +126,7 @@ void UPeekComponent::HandlePeekInput(EPeekDirection Dir, bool bPressed)
     if ((!bSwitched && !CanPeekNow()) || !IsDirAllowed(Dir)) return;
 
     const double& Last = (Dir==EPeekDirection::Left) ? LastPressL : LastPressR;
-    const bool bDouble = (Now - Last) <= 0.25;
+    const bool bDouble = (Now - Last) <= Settings.DoubleTapWindowSec;
     
     if (Dir == EPeekDirection::Left)
       LastPressL = Now;
@@ -136,7 +135,7 @@ void UPeekComponent::HandlePeekInput(EPeekDirection Dir, bool bPressed)
     const EPeekMode Mode = bDouble ? EPeekMode::Toggle : EPeekMode::Hold;
     bHoldCandidate = !bDouble;
     HoldStartTime  = Now;
-
+    
     // depth hint (0..255) ~ 40% of max for quick start
     const uint8 HintQ = (uint8)FMath::RoundToInt(255.f * 0.4f);
     Server_BeginPeek(Dir, Mode, HintQ);
@@ -146,7 +145,7 @@ void UPeekComponent::HandlePeekInput(EPeekDirection Dir, bool bPressed)
     if (Net.Mode == EPeekMode::Toggle) return; // stay out
 
     const double Held = Now - HoldStartTime;
-    if (bHoldCandidate && Held < 0.15)
+    if (bHoldCandidate && Held < Settings.BurstTapMaxSec)
     {
       // Convert the just-started Hold into a Burst: retract smoothly from current depth.
       if (Cover->GetPeek() == Dir)        // we’re already out in this direction
@@ -196,6 +195,7 @@ void UPeekComponent::Server_BeginPeek_Implementation(EPeekDirection Dir, EPeekMo
   Net.PeekDepthQ    = (uint8)FMath::RoundToInt(255.f * A);
 
   OnRep_Net();
+  GetOwner()->ForceNetUpdate();
   StartOut(Mode, A);
 }
 
@@ -212,6 +212,7 @@ void UPeekComponent::Server_StopPeek_Implementation()
   Net.Mode = EPeekMode::None;
   Net.PeekDepthQ = 0;
   OnRep_Net();
+  GetOwner()->ForceNetUpdate();
   LastRetractTime = GetWorld()->GetTimeSeconds();
 }
 

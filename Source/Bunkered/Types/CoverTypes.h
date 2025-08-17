@@ -29,3 +29,8 @@ enum class EExposureState : uint8
 	Peeking UMETA(DisplayName="Peeking"),
 	Exposed UMETA(DisplayName="Exposed")
 };
+
+
+// Quantization helpers for normalized [0..1] values replicated as bytes.
+static FORCEINLINE uint8  Quantize01(float v) { return (uint8)FMath::Clamp(FMath::RoundToInt(v * 255.f), 0, 255); }
+static FORCEINLINE float Dequantize01(uint8 q){ return float(q) / 255.f; }
