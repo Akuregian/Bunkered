@@ -61,7 +61,7 @@ void ABunkeredPlayerController::OnMove(const FInputActionValue& Value)
     {
         const FVector2D V = Value.Get<FVector2D>();
         IBunkerCoverInterface::Execute_Pawn_Movement(P, V);
-        IBunkerCoverInterface::Execute_Cover_Slide(P, V.X); // Test: If works keep this
+        IBunkerCoverInterface::Execute_Cover_Slide(P, V.X); 
     }
 }
 

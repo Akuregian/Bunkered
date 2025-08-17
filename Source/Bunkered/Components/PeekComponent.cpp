@@ -73,7 +73,10 @@ void UPeekComponent::RefreshAnchorFromCoverAlpha(float NewAlpha)
         float MaxDepthCm = 0.f;
         if (!S->IsPeekAllowedAtAlpha(NewAlpha, Net.Dir, MaxDepthCm))
         {
-          Server_StopPeek();
+          if (Net.Mode == EPeekMode::Toggle)
+            Server_StopPeek();
+          else
+            Server_SoftRetract();
         }
       }
     }
@@ -216,6 +219,15 @@ void UPeekComponent::Server_StopPeek_Implementation()
   LastRetractTime = GetWorld()->GetTimeSeconds();
 }
 
+void UPeekComponent::Server_SoftRetract_Implementation()
+{
+  if (!Cover.IsValid() || Cover->GetPeek() == EPeekDirection::None) return;
+  
+  Net.Mode = EPeekMode::Burst; // reuse in-ramp logic
+  OnRep_Net();
+  StartIn(); // will call Server_StopPeek() at the end
+}
+
 void UPeekComponent::OnRep_Net()
 {
   AlphaLocal = Net.PeekDepthQ / 255.f;
@@ -336,6 +348,10 @@ void UPeekComponent::UpdateProxies(float DepthAlpha)
 
 void UPeekComponent::ApplyCameraTilt()
 {
+
+  // Skip camera work on dedicated servers (ApplyCameraTilt) to avoid wasted work
+  if (GetNetMode() == NM_DedicatedServer) return;
+  
   if (ACharacter* C = Cast<ACharacter>(GetOwner()))
   {
     if (USpringArmComponent* Boom = C->FindComponentByClass<USpringArmComponent>())

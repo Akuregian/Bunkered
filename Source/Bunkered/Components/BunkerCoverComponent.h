@@ -10,6 +10,7 @@ class ABunkerBase;
 class UCoverSplineComponent;
 class ACharacter;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FBunkerChanged, ABunkerBase*, OldBunker, ABunkerBase*, NewBunker);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCoverAlphaChanged, float, NewAlpha);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FCoverStanceChanged, ECoverStance, NewStance, EExposureState, NewExposure);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FCoverPeekChanged, EPeekDirection, NewPeek, bool, bIsPeeking);
@@ -40,6 +41,7 @@ public:
   UFUNCTION(BlueprintPure,   Category="Cover") EPeekDirection GetPeek() const { return Peek; }
 
   // Delegates for UI/Anim
+  UPROPERTY(BlueprintAssignable) FBunkerChanged   OnBunkerChanged;
   UPROPERTY(BlueprintAssignable) FCoverAlphaChanged   OnCoverAlphaChanged;
   UPROPERTY(BlueprintAssignable) FCoverStanceChanged  OnStanceChanged;
   UPROPERTY(BlueprintAssignable) FCoverPeekChanged    OnPeekChanged;
@@ -49,8 +51,8 @@ public:
   // ---- Server RPCs ----
   UFUNCTION(Server, Reliable) void Server_EnterCoverAtAlpha(ABunkerBase* Bunker, float Alpha);
   UFUNCTION(Server, Reliable) void Server_ExitCover();
-  // Sliding is spammy (fires every input tick) so we set to UnReliable [?]
-  UFUNCTION(Server, UnReliable) void Server_SlideAlongCover(float DeltaAlpha);
+  // Sliding is spammy (fires every input tick) so we set to Unreliable [?]
+  UFUNCTION(Server, Unreliable) void Server_SlideAlongCover(float DeltaAlpha);
   UFUNCTION(Server, Reliable) void Server_SetStance(ECoverStance NewStance);
   UFUNCTION(Server, Reliable) void Server_SetPeek(EPeekDirection Direction, bool bEnable);
   UFUNCTION(Server, Reliable) void Server_SetExposure(EExposureState NewExposure);
@@ -71,7 +73,11 @@ public:
 private:
   TWeakObjectPtr<ACharacter> OwnerCharacter;
 
+  // Not replicated; used to form Old/New on clients
+  UPROPERTY(Transient) ABunkerBase* LastReplicatedBunker = nullptr;
+
   // Handlers
+  void HandleBunkerChanged(ABunkerBase* OldBunker, ABunkerBase* NewBunker, bool bServerSide);
   void HandleCoverAlphaChanged();       // calls delegate + snaps owner
   void HandleStanceExposureChanged();   // broadcasts stance/exposure change
   void HandlePeekChanged();             // broadcasts peek change

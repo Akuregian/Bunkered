@@ -265,8 +265,6 @@ void ABunkeredCharacter::DoMove(float Right, float Forward)
 {
     if (BunkerCoverComponent && BunkerCoverComponent->IsInCover())
     {
-        if (Right >  0.6f) { Cover_Slide_Implementation(+1.f); return; }
-        if (Right < -0.6f) { Cover_Slide_Implementation(-1.f); return; }
         return; // swallow free-move while in cover
     }
 

@@ -64,6 +64,7 @@ protected:
 
   UFUNCTION(Server, Reliable) void Server_BeginPeek(EPeekDirection Dir, EPeekMode Mode, uint8 ClientDepthHint);
   UFUNCTION(Server, Reliable) void Server_StopPeek();
+  UFUNCTION(Server, Reliable) void Server_SoftRetract();
   UFUNCTION() void OnRep_Net();
 
   UFUNCTION() void RefreshAnchorFromCoverAlpha(float NewAlpha);
