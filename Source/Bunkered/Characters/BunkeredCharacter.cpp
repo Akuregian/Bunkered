@@ -96,21 +96,30 @@ void ABunkeredCharacter::Cover_Exit_Implementation()
 void ABunkeredCharacter::Cover_Slide_Implementation(float Axis)
 {
     if (!BunkerCoverComponent) return;
+    
     Axis = FMath::Clamp(Axis, -1.f, +1.f);
-    if (FMath::IsNearlyZero(Axis)) return;
+    if (FMath::IsNearlyZero(Axis, 0.02f)) return; // small deadzone to kill stick noise
 
-    // Convert cm/s -> Δalpha using current spline length
     float dAlpha = 0.f;
+
     if (ABunkerBase* B = BunkerCoverComponent->GetCurrentBunker())
         if (UCoverSplineComponent* S = B->GetCoverSpline())
         {
             const float len = FMath::Max(1.f, S->GetSplineLength()); // cm
-            dAlpha = (Axis * SlideSpeedCmPerSec * GetWorld()->GetDeltaSeconds()) / len;
+            const float base = (Axis * SlideSpeedCmPerSec * GetWorld()->GetDeltaSeconds()) / len;
+
+            // Edge assist
+            const float alphaNow = BunkerCoverComponent->GetCoverAlpha();
+            const float assist = S->GetEdgeAssistMultiplier(alphaNow, Axis);
+            dAlpha = base * assist;
         }
 
     if (FMath::IsNearlyZero(dAlpha)) return;
-    if (HasAuthority()) BunkerCoverComponent->SlideAlongCover(dAlpha);
-    else BunkerCoverComponent->Server_SlideAlongCover(dAlpha);
+    
+    if (HasAuthority())
+        BunkerCoverComponent->SlideAlongCover(dAlpha);
+    else
+        BunkerCoverComponent->Server_SlideAlongCover(dAlpha);
 }
 
 void ABunkeredCharacter::Cover_Peek_Implementation(EPeekDirection Direction, bool bPressed)

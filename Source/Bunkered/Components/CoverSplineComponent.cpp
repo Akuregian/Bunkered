@@ -80,6 +80,37 @@ void UCoverSplineComponent::PostEditComponentMove(bool bFinished)
   UpdateSpline();
 }
 
+static float SmoothStep01(float x) { x = FMath::Clamp(x, 0.f, 1.f); return x*x*(3.f - 2.f*x); }
+
+float UCoverSplineComponent::GetEdgeAssistMultiplier(float Alpha, float SlideAxis) const
+{
+  if (FMath::IsNearlyZero(SlideAxis)) return 1.f;
+
+  const float Band = FMath::Clamp(EdgeAssist.EdgeBandT, 0.0f, 0.25f);
+  const float MaxM = FMath::Max(EdgeAssist.MaxBoost, EdgeAssist.MinBoost);
+  const float MinM = FMath::Max(1.f, EdgeAssist.MinBoost);
+
+  float bestBoost = 1.f;
+
+  // Look for nearest boundary in slide direction
+  // If sliding left, the interesting edges are region TMin; if right, TMax.
+  for (const FPeekRegion& R : PeekRegions) // assume you already have PeekRegions on the spline
+  {
+    const float EdgeT = (SlideAxis < 0.f) ? R.TMin : R.TMax;
+    const float d = FMath::Abs(Alpha - EdgeT);
+    if (d <= Band)
+    {
+      // 0 at far edge of band, 1 at the boundary
+      const float t = 1.f - (d / Band);
+      const float k = SmoothStep01(t);
+      const float m = FMath::Lerp(MinM, MaxM, k);
+      bestBoost = FMath::Max(bestBoost, m);
+    }
+  }
+
+  return bestBoost;
+}
+
 void UCoverSplineComponent::DebugDrawPeekRegions() const
 {
 

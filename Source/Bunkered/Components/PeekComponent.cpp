@@ -178,29 +178,55 @@ void UPeekComponent::Server_BeginPeek_Implementation(EPeekDirection Dir, EPeekMo
 
   Net.Dir  = Dir;
   Net.Mode = Mode;
-  const float HintA = ClientDepthHint / 255.f;
-    const float Amin  = ComputeDepthAlphaMinForClearance();
 
-  // Cap by spline MaxDepth at this alpha (convert cm → alpha using Settings.MaxOffsetCm)
-  float MaxDepthCm = Settings.MaxOffsetCm; // fallback
+  // Client provides a small starting hint (0..255) to feel snappy
+  const float HintA = FMath::Clamp(static_cast<float>(ClientDepthHint) / 255.f, 0.f, 1.f);
+
+  // Minimum normalized depth to clear the cover plane (0..1 in our local "max offset" space)
+  const float Amin = ComputeDepthAlphaMinForClearance();
+
+  // Max allowed depth from region, in cm (fallback to MaxOffset if query fails)
+  float MaxDepthCm = Settings.MaxOffsetCm;
   if (ABunkerBase* B = Cover->GetCurrentBunker())
   {
     if (UCoverSplineComponent* S = B->GetCoverSpline())
     {
       float Tmp = 0.f;
       const float Alpha = Cover->GetCoverAlpha();
-      if (S->IsPeekAllowedAtAlpha(Alpha, Dir, Tmp)) MaxDepthCm = FMath::Max(1.f, Tmp);
+      if (S->IsPeekAllowedAtAlpha(Alpha, Dir, Tmp))
+      {
+        MaxDepthCm = FMath::Max(1.f, Tmp);
+      }
     }
   }
-  const float Amax = FMath::Clamp(MaxDepthCm / FMath::Max(1.f, Settings.MaxOffsetCm), 0.f, 1.f);
-  const float A = FMath::Clamp(FMath::Max(HintA, Amin), 0.f, Amax);
-  
-  Net.PeekDepthQ    = (uint8)FMath::RoundToInt(255.f * A);
 
+  // Convert region cap to normalized [0..1] using our MaxOffset scale
+  const float Amax = FMath::Clamp(MaxDepthCm / FMath::Max(1.f, Settings.MaxOffsetCm), 0.f, 1.f);
+
+  // Base target: at least the clearance minimum, also honoring the client hint
+  float A = FMath::Clamp(FMath::Max(HintA, Amin), 0.f, Amax);
+
+  // === Toggle bias: land at a "goldilocks" depth on double-tap ===
+  if (Mode == EPeekMode::Toggle)
+  {
+    const float safetyN   = ToggleBias.SafetyCm / FMath::Max(1.f, Settings.MaxOffsetCm);
+    const float extraPct  = FMath::Clamp(ToggleBias.ExtraPercent, 0.f, 0.5f);
+
+    // Start from (clearance + safety), then add a fraction of the remaining room
+    float targetN = FMath::Clamp(Amin + safetyN, 0.f, Amax);
+    targetN      += (Amax - targetN) * extraPct;
+
+    // Clamp final target to region max
+    A = FMath::Clamp(targetN, 0.f, Amax);
+  }
+
+  // Quantize and publish initial depth
+  Net.PeekDepthQ = (uint8)FMath::RoundToInt(255.f * A);
   OnRep_Net();
-  GetOwner()->ForceNetUpdate();
-  StartOut(Mode, A);
-}
+  GetOwner()->ForceNetUpdate(); // make start feel instant on clients
+
+  // Drive the out-ramp toward our (possibly biased) target
+  StartOut(Mode, A);}
 
 void UPeekComponent::Server_StopPeek_Implementation()
 {

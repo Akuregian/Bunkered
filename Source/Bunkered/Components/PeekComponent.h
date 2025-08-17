@@ -25,6 +25,15 @@ struct FPeekSettings {
   UPROPERTY(EditDefaultsOnly) float BurstTapMaxSec    = 0.15f;
 };
 
+USTRUCT(BlueprintType)
+struct FToggleBiasSettings
+{
+  GENERATED_BODY()
+  UPROPERTY(EditAnywhere) float SafetyCm       = 3.0f;   // add to clearance
+  UPROPERTY(EditAnywhere) float ExtraPercent   = 0.15f;  // % of remaining room beyond clearance
+  UPROPERTY(EditAnywhere) float SettleTimeSec  = 0.06f;  // quick micro settle after ramp out
+};
+
 USTRUCT()
 struct FPeekNetState {
   GENERATED_BODY()
@@ -54,6 +63,7 @@ public:
   UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector HeadLocal    = FVector(0, 10, 65);
   UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector ShoulderLocal= FVector(0, 15, 50);
   UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector GunLocal     = FVector(25, 18, 45);
+  UPROPERTY(EditAnywhere, Category="Peek|Feel") FToggleBiasSettings ToggleBias;
 
   // Input hooks (PC forwards Q/E)
   void HandlePeekInput(EPeekDirection Dir, bool bPressed);

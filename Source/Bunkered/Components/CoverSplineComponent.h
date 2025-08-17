@@ -6,6 +6,15 @@
 #include "CoverSplineComponent.generated.h"
 
 USTRUCT(BlueprintType)
+struct FEdgeAssistSettings
+{
+  GENERATED_BODY()
+  UPROPERTY(EditAnywhere) float EdgeBandT = 0.06f;     // normalized span near each region edge
+  UPROPERTY(EditAnywhere) float MaxBoost = 1.25f;      // top multiplier at the boundary
+  UPROPERTY(EditAnywhere) float MinBoost = 1.00f;      // baseline away from edges
+};
+
+USTRUCT(BlueprintType)
 struct FPeekRegion
 {
   GENERATED_BODY()
@@ -61,6 +70,11 @@ public:
   // Refresh spline components when moved/updated
   virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
   virtual void PostEditComponentMove(bool bFinished) override;
+
+  UPROPERTY(EditAnywhere, Category="Cover|Feel") FEdgeAssistSettings EdgeAssist;
+
+  // Returns a multiplier [MinBoost..MaxBoost] based on alpha’s proximity to a peekable edge
+  float GetEdgeAssistMultiplier(float Alpha, float SlideAxis /*-1 left, +1 right*/) const;
 
   // ------ Debug (editor/runtime) ----
   UPROPERTY(EditAnywhere, Category="Cover|Debug")
