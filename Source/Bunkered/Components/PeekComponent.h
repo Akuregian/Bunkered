@@ -21,7 +21,6 @@ struct FPeekSettings {
   UPROPERTY(EditDefaultsOnly) float CameraTiltDeg = 6.f;
   UPROPERTY(EditDefaultsOnly) float MarginClearanceCm = 2.5f;
   UPROPERTY(EditDefaultsOnly) float RefractorySec = 0.12f;
-  UPROPERTY(EditDefaultsOnly) float DepthStepAlpha = 0.08f; // scroll or Shift+Q/E
 };
 
 USTRUCT()
@@ -35,13 +34,13 @@ struct FPeekNetState {
 USTRUCT()
 struct FPeekAnchor {
   GENERATED_BODY()
-  UPROPERTY() FVector EdgeRight = FVector::RightVector; // world unit vector
-  UPROPERTY() FVector PlaneNormal = FVector::RightVector; // approx outward
-  UPROPERTY() float   PlaneD = 0.f; // plane eq: n·x + d = 0
-  UPROPERTY() FVector SlotOrigin = FVector::ZeroVector;
+  UPROPERTY() FVector EdgeRight   = FVector::RightVector; // outward axis
+  UPROPERTY() FVector PlaneNormal = FVector::RightVector; // same as outward
+  UPROPERTY() float   PlaneD      = 0.f;                  // plane eq: n·x + d = 0
+  UPROPERTY() FVector SlotOrigin  = FVector::ZeroVector;  // anchor on spline
 };
 
-UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup=(Cover), meta=(BlueprintSpawnableComponent))
 class BUNKERED_API UPeekComponent : public UActorComponent
 {
   GENERATED_BODY()
@@ -49,29 +48,26 @@ public:
   UPeekComponent();
 
   UPROPERTY(EditDefaultsOnly, Category="Peek") FPeekSettings Settings;
-  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") float HeadRadius = 10.f;
-  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector HeadLocal = FVector(0, 10, 65);
-  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector ShoulderLocal = FVector(0, 15, 50);
-  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector GunLocal = FVector(25, 18, 45);
+  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") float   HeadRadius   = 10.f;
+  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector HeadLocal    = FVector(0, 10, 65);
+  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector ShoulderLocal= FVector(0, 15, 50);
+  UPROPERTY(EditDefaultsOnly, Category="Peek|Proxies") FVector GunLocal     = FVector(25, 18, 45);
 
-  // Call when slot/snake changes (we auto-bind to CoverComp delegates)
-  UFUNCTION()
-  void RefreshAnchorFromCover(int32 Index);
-
-  // Input hooks (PC forwards Q/E and depth axis)
+  // Input hooks (PC forwards Q/E)
   void HandlePeekInput(EPeekDirection Dir, bool bPressed);
 
 protected:
   virtual void BeginPlay() override;
   virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-  UFUNCTION(Server, Reliable) void Server_BeginPeek(EPeekDirection Dir, EPeekMode Mode, uint8 ClientAlphaHint);
+  UFUNCTION(Server, Reliable) void Server_BeginPeek(EPeekDirection Dir, EPeekMode Mode, uint8 ClientDepthHint);
   UFUNCTION(Server, Reliable) void Server_StopPeek();
   UFUNCTION() void OnRep_Net();
 
+  UFUNCTION() void RefreshAnchorFromCoverAlpha(float NewAlpha);
+
 private:
   TWeakObjectPtr<UBunkerCoverComponent> Cover;
-  
   UPROPERTY(ReplicatedUsing=OnRep_Net) FPeekNetState Net;
 
   // exposure proxies (server collision only)
@@ -80,16 +76,16 @@ private:
   UPROPERTY() USphereComponent* GunHit = nullptr;
 
   FPeekAnchor Anchor;
-  float AlphaLocal = 0.f;
+  float AlphaLocal = 0.f; // 0..1 depth (not cover alpha)
   double LastRetractTime = -1.0;
-  double LastPressTimeL = -10.0, LastPressTimeR = -10.0;
+  double LastPressL = -10.0, LastPressR = -10.0;
   bool bHoldCandidate = false; double HoldStartTime = 0.0;
   FTimerHandle OutHandle, InHandle;
 
   void EnsureProxies();
-  void UpdateProxies(float NewAlpha); // server+client cosmetics (server enables QueryOnly)
-  float ComputeAlphaMinForClearance() const;
-  void StartOut(EPeekMode Mode);
+  void UpdateProxies(float DepthAlpha); // cosmetic + server query enable
+  float ComputeDepthAlphaMinForClearance() const;
+  void StartOut(EPeekMode Mode, float TargetDepthAlpha);
   void StartIn();
   void ApplyCameraTilt();
 

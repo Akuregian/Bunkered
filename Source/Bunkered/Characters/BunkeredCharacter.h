@@ -17,10 +17,7 @@ class UCameraComponent;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
-/**
- * Third-person pawn that EXECUTES cover actions.
- * PlayerController owns input and calls the BunkerCoverInterface methods.
- */
+/** Third-person pawn that EXECUTES cover actions (spline-only). */
 UCLASS()
 class BUNKERED_API ABunkeredCharacter : public ACharacter, public IBunkerCoverInterface
 {
@@ -37,76 +34,60 @@ class BUNKERED_API ABunkeredCharacter : public ACharacter, public IBunkerCoverIn
 public:
     ABunkeredCharacter();
 
-    /** Bunker Cover Component - bunker movement and cover logic */
+    /** Cover Component - bunker movement and cover logic */
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
     TObjectPtr<UBunkerCoverComponent> BunkerCoverComponent;
 
-    /* BunkerAdvisor - Suggest optimal bunkers o traverse to */
+    /** BunkerAdvisor - suggests bunker+alpha to traverse to */
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
     TObjectPtr<UBunkerAdvisorComponent> BunkerAdvisorComponent;
 
-    /* Peek Component - Handles all Logic for peeking */
+    /** Peek Component - handles peeking */
     UPROPERTY(BlueprintReadWrite, EditAnywhere, Category="Components")
     TObjectPtr<UPeekComponent> PeekComponent;
 
 protected:
     // === IBunkerCoverInterface ===
-    virtual void EnterSlotOnBunker_Implementation() override;
-    virtual void SlotTransition_Implementation(int32 Delta) override;
-    virtual void SetSlotStance_Implementation(ECoverStance Stance) override;
-    virtual void SlotPeek_Implementation(EPeekDirection Direction, bool bPressed) override;
+    virtual void Cover_EnterNearest_Implementation() override;
+    virtual void Cover_Exit_Implementation() override;
+    virtual void Cover_Slide_Implementation(float Axis) override;
+    virtual void Cover_Peek_Implementation(EPeekDirection Direction, bool bPressed) override;
     virtual void Pawn_Movement_Implementation(FVector2D Move) override;
     virtual void Pawn_MouseLook_Implementation(FVector2D Look) override;
     virtual void Pawn_ChangeBunkerStance_Implementation(bool bCrouching) override;
 
-    // Helper: find nearby bunker/slot (you can swap to EQS later)
-    bool FindNearbyBunkerAndSlot(ABunkerBase*& OutBunker, int32& OutSlot) const;
+    // helpers
+    bool FindNearbyBunkerAndAlpha(ABunkerBase*& OutBunker, float& OutAlpha) const;
 
-    // No input binding here; PC handles inputs.
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 public:
-
-    // === Auto-traverse glue ===
+    // === Auto-traverse glue (advisor → pawn) ===
     UFUNCTION()
-    void HandleBeginTraverseTo(ABunkerBase* TargetBunker, int32 TargetSlot);
+    void HandleBeginTraverseTo(ABunkerBase* TargetBunker, float TargetAlpha);
 
     void StartMoveTo(const FVector& Dest);
     void PollArrivalAndEnter();        // timer callback
-    bool CheckAndAutoVaultToward(const FVector& Dest); // returns true if a vault was triggered
+    bool CheckAndAutoVaultToward(const FVector& Dest); // optional vault
 
     FTimerHandle MovePollTimer;
     TWeakObjectPtr<ABunkerBase> PendingBunker;
-    int32 PendingSlot = INDEX_NONE;
+    float PendingAlpha = 0.f;
 
-    // Optional tuning for auto-vault
-    UPROPERTY(EditAnywhere, Category="Movement|Vault")
-    float VaultProbeDistance = 150.f;     // how far ahead to probe
+    // Optional tuning
+    UPROPERTY(EditAnywhere, Category="Movement|Vault") float VaultProbeDistance = 150.f;
+    UPROPERTY(EditAnywhere, Category="Movement|Vault") float VaultMaxHeight = 90.f;
+    UPROPERTY(EditAnywhere, Category="Movement|Vault") float VaultForwardImpulse = 400.f;
+    UPROPERTY(EditAnywhere, Category="Movement|Vault") float VaultUpImpulse = 300.f;
 
-    UPROPERTY(EditAnywhere, Category="Movement|Vault")
-    float VaultMaxHeight = 90.f;          // max obstacle height to auto-vault (uu)
-
-    UPROPERTY(EditAnywhere, Category="Movement|Vault")
-    float VaultForwardImpulse = 400.f;    // forward impulse when vaulting
-
-    UPROPERTY(EditAnywhere, Category="Movement|Vault")
-    float VaultUpImpulse = 300.f;         // vertical impulse when vaulting
-    // ----- End auto-traverse glue -----
+    // Spline traversal tuning
+    UPROPERTY(EditAnywhere, Category="Cover") float SlideStepAlpha = 0.10f;    // per key press
+    UPROPERTY(EditAnywhere, Category="Cover") float EnterDistanceThreshold = 120.f;
     
-    // Optional ----- public helpers that UI/blueprints can call---------
-    UFUNCTION(BlueprintCallable, Category="Input")
-    void DoMove(float Right, float Forward);
-
-    UFUNCTION(BlueprintCallable, Category="Input")
-    void DoLook(float Yaw, float Pitch);
-
-    UFUNCTION(BlueprintCallable, Category="Input")
-    void DoCrouchToggle();
-    
-    UFUNCTION(BlueprintCallable, Category="Bunker|Navigate")
-    bool Nav_UpdateSuggestion();
-
-    UFUNCTION(BlueprintCallable, Category="Bunker|Navigate")
-    bool Nav_AcceptSuggestion();
-    // -----------------------------------------------------------------
+    // Optional helpers for UI/blueprints
+    UFUNCTION(BlueprintCallable, Category="Input") void DoMove(float Right, float Forward);
+    UFUNCTION(BlueprintCallable, Category="Input") void DoLook(float Yaw, float Pitch);
+    UFUNCTION(BlueprintCallable, Category="Input") void DoCrouchToggle();
+    UFUNCTION(BlueprintCallable, Category="Bunker|Navigate") bool Nav_UpdateSuggestion();
+    UFUNCTION(BlueprintCallable, Category="Bunker|Navigate") bool Nav_AcceptSuggestion();
 };

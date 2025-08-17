@@ -1,39 +1,27 @@
 // Bunkers/BunkerBase.h
 #pragma once
+
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Types/CoverTypes.h"
 #include "BunkerBase.generated.h"
 
+class UStaticMeshComponent;
+class UCoverSplineComponent;
+
+/**
+ * Spline-only bunker. Auto-initializes its CoverSpline to have a single
+ * “outer” point (to the actor’s +Right side) at a default Z height,
+ * and removes the engine’s default center point.
+ */
 UCLASS(Blueprintable)
 class BUNKERED_API ABunkerBase : public AActor
 {
     GENERATED_BODY()
-
 public:
     ABunkerBase();
 
-    UFUNCTION(BlueprintCallable, Category="Cover")
-    int32 FindClosestValidSlot(const FVector& WorldLocation, float MaxDist, int32& OutExactIndex) const;
-
-    UFUNCTION(BlueprintCallable, Category="Cover")
-    FTransform GetSlotWorldTransform(int32 SlotIndex) const;
-
-    UFUNCTION(BlueprintCallable, Category="Cover")
-    const FCoverSlot& GetSlot(int32 SlotIndex) const { return Slots[SlotIndex]; }
-
-    UFUNCTION(BlueprintCallable, Category="Cover")
-    int32 GetNumSlots() const { return Slots.Num(); }
-
-#if WITH_EDITOR
-    /** Scans child components with SlotTag and rebuilds Slots to reference them. */
-    UFUNCTION(CallInEditor, Category="Cover|Authoring")
-    void RebuildSlotsFromChildren();
-
-    /** Adds SlotTag to all Arrow children (non-destructive; only adds if missing). */
-    UFUNCTION(CallInEditor, Category="Cover|Authoring")
-    void TagAllArrowChildrenAsSlots();
-#endif
+    UFUNCTION(BlueprintPure, Category="Cover")
+    UCoverSplineComponent* GetCoverSpline() const { return CoverSpline; }
 
 protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
@@ -42,30 +30,25 @@ protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
     UStaticMeshComponent* Bunker;
 
-    /** Designer-authored cover slots (may reference child components). */
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Cover")
-    TArray<FCoverSlot> Slots;
-    
-    /** If true, OnConstruction will auto-rebuild slots from tagged children. */
-    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
-    bool bAutoSyncSlotsFromChildren = true;
+    /** Continuous cover path (designer edits this). */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Cover")
+    UCoverSplineComponent* CoverSpline = nullptr;
 
-    /** Tag used to identify child components that should act as slots. */
-    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
-    FName SlotTag = TEXT("CoverSlot");
+    /** Height (world Z) offset for newly seeded outer point. */
+    UPROPERTY(EditAnywhere, Category="Cover|Defaults", meta=(ClampMin="0.0"))
+    float DefaultCoverPointZ = 44.f;
 
-    /** If no tagged components are found, also harvest ALL Arrow children as slots. */
-    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
-    bool bFallbackUseAllArrowChildren = true;
+    /** Extra outward margin (uu) beyond bunker bounds when seeding an outer point. */
+    UPROPERTY(EditAnywhere, Category="Cover|Defaults", meta=(ClampMin="0.0"))
+    float DefaultOutwardMargin = 30.f;
 
-    /** Also auto-tag any Arrow children that are missing the tag. */
-    UPROPERTY(EditAnywhere, Category="Cover|Authoring")
-    bool bAutoTagArrowChildren = true;
+    /** If true, auto-clean & seed the spline in editor builds. */
+    UPROPERTY(EditAnywhere, Category="Cover|Defaults")
+    bool bAutoInitSplinePoints = true;
 
 #if WITH_EDITOR
     virtual void OnConstruction(const FTransform& Transform) override;
-
-    /** Editor data validation hook (Window → Developer Tools → Data Validation). */
     virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
+    void InitializeCoverSplineDefaults(); // cleans center, seeds outer point if needed
 #endif
 };

@@ -2,156 +2,110 @@
 #include "BunkerBase.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
-#include "Components/ArrowComponent.h"
-#include "Engine/Engine.h"
+#include "Components/CoverSplineComponent.h"
+#include "Components/SplineComponent.h"
 #include "Misc/DataValidation.h"
-
-#if WITH_EDITOR
-#include "Components/ArrowComponent.h"
-#include "ScopedTransaction.h"
-#endif
 
 ABunkerBase::ABunkerBase()
 {
-    Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-    RootComponent = Root;
+  Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+  RootComponent = Root;
 
-    Bunker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
-    Bunker->SetupAttachment(RootComponent);
-    Bunker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-    Bunker->SetCanEverAffectNavigation(false);
+  Bunker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
+  Bunker->SetupAttachment(RootComponent);
+  Bunker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+  Bunker->SetCanEverAffectNavigation(false);
+
+  CoverSpline = CreateDefaultSubobject<UCoverSplineComponent>(TEXT("CoverSpline"));
+  CoverSpline->SetupAttachment(RootComponent);
 }
 
-int32 ABunkerBase::FindClosestValidSlot(const FVector& WorldLocation, float MaxDist, int32& OutExactIndex) const
-{
-    OutExactIndex = INDEX_NONE;
-
-    const float MaxDistSq = FMath::Square(MaxDist);
-    float BestSq = MaxDistSq;
-    int32 BestIdx = INDEX_NONE;
-
-    for (int32 i = 0; i < Slots.Num(); ++i)
-    {
-        const FTransform WT = GetSlotWorldTransform(i);
-        const float DistSq = FVector::DistSquared(WT.GetLocation(), WorldLocation);
-        if (DistSq < BestSq)
-        {
-            BestSq = DistSq;
-            BestIdx = i;
-        }
-    }
-
-    OutExactIndex = BestIdx;
-    return BestIdx;
-}
-
-FTransform ABunkerBase::GetSlotWorldTransform(int32 SlotIndex) const
-{
-    check(Slots.IsValidIndex(SlotIndex));
-    const FCoverSlot& Slot = Slots[SlotIndex];
-
-    if (Slot.bUseComponentTransform)
-    {
-        // Resolve the referenced component on this actor
-        if (UActorComponent* AC = Slot.SlotPoint.GetComponent(const_cast<ABunkerBase*>(this)))
-        {
-            if (USceneComponent* SC = Cast<USceneComponent>(AC))
-            {
-                return SC->GetComponentTransform();
-            }
-        }
-    }
-
-    // Fallback: local anchor relative to bunker actor
-    return Slot.LocalAnchor * GetActorTransform();
-}
-
-static void LogEditorNote(const FString& Msg)
-{
-#if !NO_LOGGING
-    UE_LOG(LogTemp, Warning, TEXT("%s"), *Msg);
-#endif
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Yellow, Msg);
-    }
-}
-
+#if WITH_EDITOR
 void ABunkerBase::OnConstruction(const FTransform& Transform)
 {
-    Super::OnConstruction(Transform);
+  Super::OnConstruction(Transform);
 
-    RebuildSlotsFromChildren(); // always rebuild from Arrow children
-}
+  if (bAutoInitSplinePoints && CoverSpline)
+  {
+    InitializeCoverSplineDefaults();
+  }
 
+  if (CoverSpline && CoverSpline->GetNumberOfSplinePoints() == 1)
+  {
+    const FVector Center = GetActorLocation();
+    const FVector Right  = GetActorRightVector();
 
-void ABunkerBase::TagAllArrowChildrenAsSlots()
-{
-    TArray<UArrowComponent*> Arrows;
-    GetComponents<UArrowComponent>(Arrows);
-
-    int32 Tagged = 0;
-    for (UArrowComponent* Arrow : Arrows)
+    float ExtentY = 100.f;
+    if (Bunker)
     {
-        if (!Arrow) continue;
-        if (!SlotTag.IsNone() && !Arrow->ComponentHasTag(SlotTag))
-        {
-            Arrow->ComponentTags.Add(SlotTag);
-            ++Tagged;
-        }
+      ExtentY = Bunker->Bounds.BoxExtent.Y; // half-width
     }
 
-    LogEditorNote(FString::Printf(TEXT("[Bunker] Tagged %d Arrow component(s) with %s"), Tagged, *SlotTag.ToString()));
+    FVector Outer = Center + Right * (ExtentY + DefaultOutwardMargin);
+    Outer.Z = Center.Z + DefaultCoverPointZ;
+
+    CoverSpline->SetLocationAtSplinePoint(0, Outer, ESplineCoordinateSpace::World, false);
+    CoverSpline->UpdateSpline();
+  }
 }
 
-#if WITH_EDITOR
-void ABunkerBase::RebuildSlotsFromChildren()
-{
-    UE_LOG(LogTemp, Warning, TEXT("[Bunker] Rebuilding slots from arrow components only."));
-
-    Slots.Empty();
-
-    // Find all ArrowComponents on this actor
-    TArray<UArrowComponent*> Arrows;
-    GetComponents<UArrowComponent>(Arrows);
-
-    if (Arrows.Num() == 0)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[Bunker] No ArrowComponents found, cannot create slots."));
-        return;
-    }
-
-    for (UArrowComponent* Arrow : Arrows)
-    {
-        if (!Arrow || Arrow == RootComponent) continue;
-
-        FCoverSlot NewSlot;
-        NewSlot.SlotName = Arrow->GetFName();
-
-        // Properly set FComponentReference to point to this Arrow
-        NewSlot.SlotPoint.OtherActor = this;
-        NewSlot.SlotPoint.ComponentProperty = Arrow->GetFName();
-        NewSlot.bUseComponentTransform = true;
-
-        NewSlot.LocalAnchor = FTransform::Identity;
-        Slots.Add(NewSlot);
-
-        UE_LOG(LogTemp, Warning, TEXT("[Bunker] Added slot from arrow: %s"), *Arrow->GetName());
-    }
-
-    UE_LOG(LogTemp, Warning, TEXT("[Bunker] Rebuild complete: %d slots created."), Slots.Num());
-}
-#endif
-
-#if WITH_EDITOR
 EDataValidationResult ABunkerBase::IsDataValid(FDataValidationContext& Context) const
 {
-    // Don’t hard-fail. A bunker can exist without slots; just warn designers.
-    if (Slots.Num() == 0)
+  if (CoverSpline == nullptr)
+  {
+    Context.AddWarning(FText::FromString(TEXT("Bunker has no CoverSpline; add one to enable cover traversal.")));
+  }
+  return EDataValidationResult::Valid;
+}
+
+static bool IsDefaultCenterPoint(const USplineComponent* Spline, int32 PointIdx, float Tol=10.f)
+{
+    const FVector P = Spline->GetLocationAtSplinePoint(PointIdx, ESplineCoordinateSpace::World);
+    const FVector C = Spline->GetComponentLocation(); // where UE spawns the starter point
+    return FVector::DistSquared(P, C) <= FMath::Square(Tol);
+}
+
+void ABunkerBase::InitializeCoverSplineDefaults()
+{
+  if (!CoverSpline) return;
+
+  // Ensure not closed loop by default.
+  CoverSpline->SetClosedLoop(false, true);
+
+  // 1) Remove any “starter” point that sits at (or very near) actor center.
+  //    Also catch the case where the designer added a point and the default center still lingers.
+  {
+    const int32 Num = CoverSpline->GetNumberOfSplinePoints();
+    for (int32 i = Num - 1; i >= 0; --i)
     {
-        Context.AddWarning(FText::FromString(TEXT(
-            "Bunker has no slots. Add Arrow Components or then click 'Rebuild Slots From Children'." )));
+      if (IsDefaultCenterPoint(CoverSpline, i))
+      {
+        CoverSpline->RemoveSplinePoint(i, false);
+      }
     }
-    return EDataValidationResult::Valid;
+  }
+
+  // 2) If the spline has no points now, seed a single “outer” point.
+  if (CoverSpline->GetNumberOfSplinePoints() == 0)
+  {
+    // Compute an outward point based on the bunker mesh bounds.
+    const FVector Center  = GetActorLocation();
+    const FVector Right   = GetActorRightVector();
+
+    float ExtentY = 100.f; // fallback if no mesh
+    if (Bunker)
+    {
+      // Bounds are world-space extents (half sizes)
+      ExtentY = Bunker->Bounds.BoxExtent.Y;
+    }
+
+    FVector Outer = Center + Right * (ExtentY + DefaultOutwardMargin);
+    Outer.Z = Center.Z + DefaultCoverPointZ;
+
+    CoverSpline->AddSplinePoint(Outer, ESplineCoordinateSpace::World, false);
+  }
+
+  // 3) Normalize tangents (not strictly needed for a single point; safe no-op).
+  CoverSpline->UpdateSpline();
 }
 #endif

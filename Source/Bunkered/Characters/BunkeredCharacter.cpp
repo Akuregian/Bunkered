@@ -12,6 +12,7 @@
 #include "GameFramework/Controller.h"
 #include "Components/BunkerCoverComponent.h"
 #include "Bunkers/BunkerBase.h"
+#include "Components/CoverSplineComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Utility/LoggingMacros.h"
 
@@ -57,224 +58,67 @@ ABunkeredCharacter::ABunkeredCharacter()
     BunkerAdvisorComponent = CreateDefaultSubobject<UBunkerAdvisorComponent>(TEXT("BunkerAdvisorComponent"));
     BunkerAdvisorComponent->OnBeginTraverseTo.AddDynamic(this, &ABunkeredCharacter::HandleBeginTraverseTo);
 
-    // Bunker Peek Component
+    // Peek Component
     PeekComponent = CreateDefaultSubobject<UPeekComponent>(TEXT("PeekComponent"));
-
-    // Defaults for vault tuning
-    VaultProbeDistance  = 150.f;
-    VaultMaxHeight      = 90.f;
-    VaultForwardImpulse = 400.f;
-    VaultUpImpulse      = 300.f;
 }
 
 void ABunkeredCharacter::SetupPlayerInputComponent(UInputComponent* InputComp)
 {
     Super::SetupPlayerInputComponent(InputComp);
-    
 }
 
-void ABunkeredCharacter::HandleBeginTraverseTo(ABunkerBase* TargetBunker, int32 TargetSlot)
-{
-    DEBUG(5.0f, FColor::Green, TEXT("ABunkeredCharacter::HandleBeginTraverseTo() ---- Traversing dawg"));
-    
-    if (!TargetBunker) return;
-    PendingBunker = TargetBunker;
-    PendingSlot   = TargetSlot;
-
-    const FVector Dest = TargetBunker->GetSlotWorldTransform(TargetSlot).GetLocation();
-    StartMoveTo(Dest);
-}
-
-void ABunkeredCharacter::StartMoveTo(const FVector& Dest)
-{
-    if (AController* C = GetController())
-    {
-        UAIBlueprintHelperLibrary::SimpleMoveToLocation(C, Dest);
-        // Poll arrival every 0.1s
-        GetWorldTimerManager().SetTimer(MovePollTimer, this, &ABunkeredCharacter::PollArrivalAndEnter, 0.1f, true);
-    }
-}
-
-void ABunkeredCharacter::PollArrivalAndEnter()
-{
-    {
-        if (!PendingBunker.IsValid() || PendingSlot == INDEX_NONE)
-        {
-            GetWorldTimerManager().ClearTimer(MovePollTimer);
-            return;
-        }
-
-        const FVector Here = GetActorLocation();
-        const FVector Dest = PendingBunker->GetSlotWorldTransform(PendingSlot).GetLocation();
-        const float Dist = FVector::Dist(Here, Dest);
-
-        // Opportunistic vault if we’re still far but something low is in the way
-        if (Dist > 200.f)
-        {
-            CheckAndAutoVaultToward(Dest);
-        }
-
-        const float Threshold = FMath::Max(100.f, PendingBunker->GetSlot(PendingSlot).EntryRadius + 30.f);
-
-        if (Dist <= Threshold)
-        {
-            GetWorldTimerManager().ClearTimer(MovePollTimer);
-            if (auto* Cover = FindComponentByClass<UBunkerCoverComponent>())
-            {
-                if (Cover->TryEnterCover(PendingBunker.Get(), PendingSlot))
-                {
-                    // Suggest the next bunker immediately
-                    if (auto* Advisor = FindComponentByClass<UBunkerAdvisorComponent>())
-                    {
-                        Advisor->UpdateSuggestion();
-                    }
-                }
-            }
-            PendingBunker = nullptr;
-            PendingSlot = INDEX_NONE;
-        }
-    }
-}
-
-bool ABunkeredCharacter::CheckAndAutoVaultToward(const FVector& Dest)
-{
-    // Quick capsule-forward probe to detect a low obstacle (e.g., snake bunker)
-    const FVector Start = GetActorLocation();
-    const FVector Fwd = (Dest - Start).GetSafeNormal();
-
-    const FVector End = Start + Fwd * VaultProbeDistance;
-
-    // Line trace at knee height and chest height to estimate obstacle top
-    FHitResult HR;
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(AutoVault), false, this);
-    const FVector Knee = Start + FVector(0,0, 40.f);
-    const FVector Chest= Start + FVector(0,0, 90.f);
-
-    bool bKneeHit = GetWorld()->LineTraceSingleByChannel(HR, Knee, Knee + Fwd * VaultProbeDistance, ECC_Visibility, Params);
-    if (!bKneeHit) return false; // no low obstacle ahead
-
-    // If chest also hits, obstacle too tall → no auto-vault
-    FHitResult HR2;
-    const bool bChestHit = GetWorld()->LineTraceSingleByChannel(HR2, Chest, Chest + Fwd * VaultProbeDistance, ECC_Visibility, Params);
-    if (bChestHit) return false;
-
-    // Estimate height by tracing upward from the knee impact point until free
-    float Height = 0.f;
-    {
-        FHitResult UpHR;
-        const FVector UpStart = HR.ImpactPoint;
-        const FVector UpEnd   = UpStart + FVector(0,0, VaultMaxHeight + 5.f);
-        bool bUpHit = GetWorld()->LineTraceSingleByChannel(UpHR, UpStart, UpEnd, ECC_Visibility, Params);
-        Height = bUpHit ? (UpHR.Distance) : VaultMaxHeight; // crude estimate
-    }
-
-    if (Height <= VaultMaxHeight)
-    {
-        // Trigger a simple physical vault: forward+up impulse (you can replace with a montage later)
-        LaunchCharacter(FVector(Fwd * VaultForwardImpulse + FVector(0,0,VaultUpImpulse)), false, false);
-        return true;
-    }
-
-    return false;
-}
-
-bool ABunkeredCharacter::FindNearbyBunkerAndSlot(ABunkerBase*& OutBunker, int32& OutSlot) const
-{
-    const float SearchRadius = 300.f;
-    TArray<AActor*> BunkerActors;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABunkerBase::StaticClass(), BunkerActors);
-
-    float BestSq = FLT_MAX;
-    ABunkerBase* Best = nullptr;
-    int32 BestSlot = INDEX_NONE;
-
-    for (AActor* A : BunkerActors)
-    {
-        auto* Bunker = Cast<ABunkerBase>(A);
-        if (!Bunker) continue;
-
-        int32 SlotIdx = INDEX_NONE;
-        const int32 Found = Bunker->FindClosestValidSlot(GetActorLocation(), SearchRadius, SlotIdx);
-        if (Found != INDEX_NONE)
-        {
-            const float D2 = FVector::DistSquared(Bunker->GetSlotWorldTransform(SlotIdx).GetLocation(), GetActorLocation());
-            if (D2 < BestSq)
-            {
-                BestSq  = D2;
-                Best    = Bunker;
-                BestSlot = SlotIdx;
-            }
-        }
-    }
-
-    OutBunker = Best;
-    OutSlot   = BestSlot;
-    return Best != nullptr;
-}
-
-// ===== Interface execution =====
-void ABunkeredCharacter::EnterSlotOnBunker_Implementation()
+// ===== IBunkerCoverInterface impl =====
+void ABunkeredCharacter::Cover_EnterNearest_Implementation()
 {
     if (!BunkerCoverComponent) return;
 
     if (BunkerCoverComponent->IsInCover())
     {
-        DEBUG(5.0f, FColor::Red, TEXT("Ignoring EnterSlotOnBunker"));
         BunkerCoverComponent->ExitCover();
+        return;
     }
-    else
+
+    ABunkerBase* B = nullptr; float Alpha = 0.f;
+    if (FindNearbyBunkerAndAlpha(B, Alpha))
     {
-        ABunkerBase* B = nullptr; int32 Slot = INDEX_NONE;
-        if (FindNearbyBunkerAndSlot(B, Slot))
-        {
-            if (BunkerCoverComponent->TryEnterCover(B, Slot))
-            {
-                if (BunkerAdvisorComponent)
-                {
-                    BunkerAdvisorComponent->UpdateSuggestion();
-                }
-            }
-        }
+        if (HasAuthority()) BunkerCoverComponent->EnterCoverAtAlpha(B, Alpha);
+        else                BunkerCoverComponent->Server_EnterCoverAtAlpha(B, Alpha);
     }
 }
 
-void ABunkeredCharacter::SlotTransition_Implementation(int32 Delta)
+void ABunkeredCharacter::Cover_Exit_Implementation()
 {
-    if (BunkerCoverComponent)
-    {
-        if (BunkerCoverComponent->RequestSlotMoveRelative(Delta))
-        {
-            if (BunkerAdvisorComponent)
-            {
-                BunkerAdvisorComponent->UpdateSuggestion();
-            }
-        }
-    }
+    if (!BunkerCoverComponent) return;
+    if (HasAuthority()) BunkerCoverComponent->ExitCover();
+    else                BunkerCoverComponent->Server_ExitCover();
 }
 
-void ABunkeredCharacter::SetSlotStance_Implementation(ECoverStance Stance)
+void ABunkeredCharacter::Cover_Slide_Implementation(float Axis)
 {
-    if (BunkerCoverComponent) BunkerCoverComponent->SetStance(Stance);
+    if (!BunkerCoverComponent) return;
+    const float Step = SlideStepAlpha * FMath::Clamp(Axis, -1.f, +1.f);
+    if (FMath::IsNearlyZero(Step)) return;
+
+    if (HasAuthority()) BunkerCoverComponent->SlideAlongCover(Step);
+    else                BunkerCoverComponent->Server_SlideAlongCover(Step);
 }
 
-void ABunkeredCharacter::SlotPeek_Implementation(EPeekDirection Direction, bool bPressed)
+void ABunkeredCharacter::Cover_Peek_Implementation(EPeekDirection Direction, bool bPressed)
 {
     if (PeekComponent)
     {
         PeekComponent->HandlePeekInput(Direction, bPressed);
         return;
     }
-    
-    // Fallback
     if (BunkerCoverComponent)
     {
-        BunkerCoverComponent->SetPeek(Direction, bPressed);
+        if (HasAuthority()) BunkerCoverComponent->SetPeek(Direction, bPressed);
+        else                BunkerCoverComponent->Server_SetPeek(Direction, bPressed);
     }
 }
 
 void ABunkeredCharacter::Pawn_Movement_Implementation(FVector2D Move)
 {
-    // If in cover, allow horizontal traverse via DoMove (keeps your existing behavior)
     DoMove(Move.X, Move.Y);
 }
 
@@ -285,19 +129,134 @@ void ABunkeredCharacter::Pawn_MouseLook_Implementation(FVector2D Look)
 
 void ABunkeredCharacter::Pawn_ChangeBunkerStance_Implementation(bool bCrouching)
 {
-    
-    DEBUG(5.0f, FColor::Green, TEXT("IsCrouching: [%i]"), bCrouching);
     DoCrouchToggle();
 }
 
+// ===== Helpers =====
+bool ABunkeredCharacter::FindNearbyBunkerAndAlpha(ABunkerBase*& OutBunker, float& OutAlpha) const
+{
+    OutBunker = nullptr; OutAlpha = 0.f;
+
+    TArray<AActor*> BunkerActors;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABunkerBase::StaticClass(), BunkerActors);
+
+    float BestSq = FLT_MAX;
+    ABunkerBase* Best = nullptr;
+    float BestA = 0.f;
+
+    const FVector Here = GetActorLocation();
+
+    for (AActor* A : BunkerActors)
+    {
+        ABunkerBase* B = Cast<ABunkerBase>(A);
+        if (!B) continue;
+        UCoverSplineComponent* S = B->GetCoverSpline();
+        if (!S) continue;
+
+        const float A0 = S->FindClosestAlpha(Here);
+        const FVector P = S->GetWorldTransformAtAlpha(A0).GetLocation();
+        const float D2 = FVector::DistSquared(P, Here);
+        if (D2 < BestSq) { BestSq = D2; Best = B; BestA = A0; }
+    }
+
+    OutBunker = Best; OutAlpha = BestA;
+    return (Best != nullptr);
+}
+
+// ===== Advisor traversal glue =====
+void ABunkeredCharacter::HandleBeginTraverseTo(ABunkerBase* TargetBunker, float TargetAlpha)
+{
+    if (!TargetBunker) return;
+    PendingBunker = TargetBunker;
+    PendingAlpha  = TargetAlpha;
+
+    const FVector Dest = TargetBunker->GetCoverSpline()->GetWorldTransformAtAlpha(TargetAlpha).GetLocation();
+    StartMoveTo(Dest);
+}
+
+void ABunkeredCharacter::StartMoveTo(const FVector& Dest)
+{
+    if (AController* C = GetController())
+    {
+        UAIBlueprintHelperLibrary::SimpleMoveToLocation(C, Dest);
+        GetWorldTimerManager().SetTimer(MovePollTimer, this, &ABunkeredCharacter::PollArrivalAndEnter, 0.1f, true);
+    }
+}
+
+void ABunkeredCharacter::PollArrivalAndEnter()
+{
+    if (!PendingBunker.IsValid())
+    {
+        GetWorldTimerManager().ClearTimer(MovePollTimer);
+        return;
+    }
+
+    const FVector Here = GetActorLocation();
+    const FVector Dest = PendingBunker->GetCoverSpline()->GetWorldTransformAtAlpha(PendingAlpha).GetLocation();
+    const float Dist = FVector::Dist(Here, Dest);
+
+    if (Dist > 200.f)
+    {
+        CheckAndAutoVaultToward(Dest);
+    }
+
+    if (Dist <= EnterDistanceThreshold)
+    {
+        GetWorldTimerManager().ClearTimer(MovePollTimer);
+        if (BunkerCoverComponent)
+        {
+            if (HasAuthority()) BunkerCoverComponent->EnterCoverAtAlpha(PendingBunker.Get(), PendingAlpha);
+            else                BunkerCoverComponent->Server_EnterCoverAtAlpha(PendingBunker.Get(), PendingAlpha);
+
+            if (BunkerAdvisorComponent) BunkerAdvisorComponent->UpdateSuggestion();
+        }
+        PendingBunker = nullptr;
+    }
+}
+
+bool ABunkeredCharacter::CheckAndAutoVaultToward(const FVector& Dest)
+{
+    const FVector Start = GetActorLocation();
+    const FVector Fwd = (Dest - Start).GetSafeNormal();
+
+    const FVector Knee  = Start + FVector(0,0, 40.f);
+    const FVector Chest = Start + FVector(0,0, 90.f);
+
+    FHitResult HR, HR2;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(AutoVault), false, this);
+
+    const bool bKneeHit  = GetWorld()->LineTraceSingleByChannel(HR,  Knee,  Knee  + Fwd * VaultProbeDistance, ECC_Visibility, Params);
+    if (!bKneeHit) return false;
+
+    const bool bChestHit = GetWorld()->LineTraceSingleByChannel(HR2, Chest, Chest + Fwd * VaultProbeDistance, ECC_Visibility, Params);
+    if (bChestHit) return false;
+
+    // estimate height
+    float Height = 0.f;
+    {
+        FHitResult UpHR;
+        const FVector UpStart = HR.ImpactPoint;
+        const FVector UpEnd   = UpStart + FVector(0,0, VaultMaxHeight + 5.f);
+        bool bUpHit = GetWorld()->LineTraceSingleByChannel(UpHR, UpStart, UpEnd, ECC_Visibility, Params);
+        Height = bUpHit ? (UpHR.Distance) : VaultMaxHeight;
+    }
+
+    if (Height <= VaultMaxHeight)
+    {
+        LaunchCharacter(FVector(Fwd * VaultForwardImpulse + FVector(0,0,VaultUpImpulse)), false, false);
+        return true;
+    }
+    return false;
+}
+
+// ===== Optional helpers =====
 void ABunkeredCharacter::DoMove(float Right, float Forward)
 {
-    // If we are in cover, traverse Left or Right
     if (BunkerCoverComponent && BunkerCoverComponent->IsInCover())
     {
-        if (Right > 0.6f)  { BunkerCoverComponent->TraverseRight(); return; }
-        if (Right < -0.6f) { BunkerCoverComponent->TraverseLeft();  return; }
-        return; // swallow normal movement while in cover
+        if (Right >  0.6f) { Cover_Slide_Implementation(+1.f); return; }
+        if (Right < -0.6f) { Cover_Slide_Implementation(-1.f); return; }
+        return; // swallow free-move while in cover
     }
 
     if (Controller)
@@ -323,14 +282,8 @@ void ABunkeredCharacter::DoLook(float Yaw, float Pitch)
 
 void ABunkeredCharacter::DoCrouchToggle()
 {
-    if (GetCharacterMovement()->IsCrouching())
-    {
-        UnCrouch();
-    }
-    else
-    {
-        Crouch();
-    }
+    if (GetCharacterMovement()->IsCrouching()) UnCrouch();
+    else                                       Crouch();
 }
 
 bool ABunkeredCharacter::Nav_UpdateSuggestion()
@@ -338,7 +291,6 @@ bool ABunkeredCharacter::Nav_UpdateSuggestion()
     return (BunkerAdvisorComponent) ? BunkerAdvisorComponent->UpdateSuggestion() : false;
 }
 
-// Todo: Considering binding this this to PC for button presses
 bool ABunkeredCharacter::Nav_AcceptSuggestion()
 {
     return (BunkerAdvisorComponent) ? BunkerAdvisorComponent->AcceptSuggestion() : false;

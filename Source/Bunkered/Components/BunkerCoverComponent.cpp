@@ -1,266 +1,265 @@
 // Components/BunkerCoverComponent.cpp
 #include "BunkerCoverComponent.h"
 #include "Bunkers/BunkerBase.h"
-#include "Camera/CameraComponent.h"
-#include "Components/CapsuleComponent.h"
+#include "Components/CoverSplineComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "GameFramework/SpringArmComponent.h"
 #include "Net/UnrealNetwork.h"
-#include "Kismet/KismetSystemLibrary.h"
-#include "Utility/LoggingMacros.h"
+#include "DrawDebugHelpers.h"
 
 UBunkerCoverComponent::UBunkerCoverComponent()
 {
-    PrimaryComponentTick.bCanEverTick = false;
-    SetIsReplicatedByDefault(true);
+  PrimaryComponentTick.bCanEverTick = false;
+  SetIsReplicatedByDefault(true);
 }
 
 void UBunkerCoverComponent::BeginPlay()
 {
-    Super::BeginPlay();
-    OwnerCharacter = Cast<ACharacter>(GetOwner());
+  Super::BeginPlay();
+  OwnerCharacter = Cast<ACharacter>(GetOwner());
 }
 
 void UBunkerCoverComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-    
-    DOREPLIFETIME(UBunkerCoverComponent, CurrentBunker);
-    DOREPLIFETIME(UBunkerCoverComponent, CurrentSlotIndex);
-    DOREPLIFETIME(UBunkerCoverComponent, Stance);
-    DOREPLIFETIME(UBunkerCoverComponent, Exposure);
-    DOREPLIFETIME(UBunkerCoverComponent, Peek);
+  Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+  DOREPLIFETIME(UBunkerCoverComponent, CurrentBunker);
+  DOREPLIFETIME(UBunkerCoverComponent, Stance);
+  DOREPLIFETIME(UBunkerCoverComponent, Exposure);
+  DOREPLIFETIME(UBunkerCoverComponent, Peek);
+  DOREPLIFETIME(UBunkerCoverComponent, CoverAlpha);
 }
 
-bool UBunkerCoverComponent::IsStanceAllowedAtSlot(ECoverStance InStance, int32 SlotIndex) const
+// ----- Core API -----
+
+bool UBunkerCoverComponent::EnterCoverAtAlpha(ABunkerBase* Bunker, float Alpha)
 {
-    if (!CurrentBunker || !ensure(CurrentBunker->GetNumSlots() > SlotIndex)) return false;
-    const FCoverSlot& Slot = CurrentBunker->GetSlot(SlotIndex);
-    return Slot.AllowedStances.Num()==0 || Slot.AllowedStances.Contains(InStance);
-}
+  if (!OwnerCharacter.IsValid() || !Bunker) return false;
+  if (!Bunker->GetCoverSpline()) return false;
 
-bool UBunkerCoverComponent::IsPeekAllowedAtSlot(EPeekDirection InPeek, int32 SlotIndex) const
-{
-    if (InPeek == EPeekDirection::None) return true;
-    if (!CurrentBunker || !ensure(CurrentBunker->GetNumSlots() > SlotIndex)) return false;
-    const FCoverSlot& Slot = CurrentBunker->GetSlot(SlotIndex);
-    return Slot.AllowedPeeks.Num() == 0 || Slot.AllowedPeeks.Contains(InPeek);
-}
+  if (GetOwner()->HasAuthority())
+  {
+    CurrentBunker = Bunker;
+    CoverAlpha    = FMath::Clamp(Alpha, 0.f, 1.f);
+    Stance        = Bunker->GetCoverSpline()->RequiredStanceAtAlpha(CoverAlpha);
+    Exposure      = EExposureState::Hidden;
+    Peek          = EPeekDirection::None;
 
-bool UBunkerCoverComponent::TryEnterCover(ABunkerBase* Bunker, int32 SlotIndex)
-{
-    if (!OwnerCharacter.IsValid() || !Bunker || !Bunker->GetNumSlots() || !Bunker->GetSlot(SlotIndex).EntryRadius)
-        return false;
-
-    if (GetOwner()->HasAuthority())
-    {
-        CurrentBunker = Bunker;
-        CurrentSlotIndex = SlotIndex;
-
-        const FCoverSlot& Slot = Bunker->GetSlot(SlotIndex);
-        Stance = Slot.AllowedStances.Num() ? Slot.AllowedStances[0] : ECoverStance::Crouch;
-        Exposure = EExposureState::Hidden;
-        Peek = EPeekDirection::None;
-
-        SnapOwnerToSlot();
-        
-        OnRep_Bunker();
-        OnRep_Slot();
-        OnRep_StanceExposure();
-        //OnRep_Peek();
-        return true;
-    }
-    else
-    {
-        Server_TryEnterCover(Bunker, SlotIndex);
-        return true;
-    }
+    SnapOwnerToCoverAlpha();
+    OnRep_Bunker();
+    OnRep_CoverAlpha();
+    OnRep_StanceExposure();
+    OnRep_Peek();
+    return true;
+  }
+  else
+  {
+    Server_EnterCoverAtAlpha(Bunker, Alpha);
+    return true;
+  }
 }
 
 void UBunkerCoverComponent::ExitCover()
 {
-    if (GetOwner()->HasAuthority())
-    {
-        CurrentBunker = nullptr;
-        CurrentSlotIndex = INDEX_NONE;
-        Exposure = EExposureState::Hidden;
-        Peek = EPeekDirection::None;
-        OnRep_Bunker(); OnRep_Slot(); OnRep_StanceExposure(); OnRep_Peek();
-    }
-    else
-    {
-        Server_ExitCover();
-    }
+  if (GetOwner()->HasAuthority())
+  {
+    CurrentBunker = nullptr;
+    Exposure = EExposureState::Hidden;
+    Peek     = EPeekDirection::None;
+    OnRep_Bunker(); OnRep_StanceExposure(); OnRep_Peek();
+  }
+  else
+  {
+    Server_ExitCover();
+  }
 }
 
-bool UBunkerCoverComponent::RequestSlotMoveRelative(int32 Delta)
+bool UBunkerCoverComponent::SlideAlongCover(float DeltaAlpha)
 {
-    // return if not in cover
-    if (!IsInCover() || Delta == 0) return false;
+  if (!IsInCover() || !CurrentBunker) return false;
+  UCoverSplineComponent* S = CurrentBunker->GetCoverSpline();
+  if (!S) return false;
 
-    // Server
-    if (GetOwner()->HasAuthority())
-    {
-        const int32 SlotNum = CurrentBunker->GetNumSlots();
-        int32 NewSlotIndex = FMath::Clamp(CurrentSlotIndex + Delta, 0, SlotNum - 1);
+  if (GetOwner()->HasAuthority())
+  {
+    const float NewAlpha = S->ClampT(CoverAlpha + DeltaAlpha);
+    if (FMath::IsNearlyEqual(NewAlpha, CoverAlpha, 1e-4f)) return false;
 
-        // Transition possible
-        if (NewSlotIndex != CurrentSlotIndex)
-        {
-            CurrentSlotIndex = NewSlotIndex; // update CurrentSlotIndex to new Slot
-            Exposure = EExposureState::Hidden; // Exposure: Hidden
-            Peek = EPeekDirection::None; // reset peek direction
+    CoverAlpha = NewAlpha;
+    // Hide while traversing; peek canceled
+    Exposure = EExposureState::Hidden;
+    Peek     = EPeekDirection::None;
 
-            if (!IsStanceAllowedAtSlot(Stance, CurrentSlotIndex))
-            {
-                const FCoverSlot& Slot = CurrentBunker->GetSlot(CurrentSlotIndex);
-                Stance = Slot.AllowedStances.Num() ? Slot.AllowedStances[0] : ECoverStance::Crouch;
-            }
+    Stance = S->RequiredStanceAtAlpha(CoverAlpha);
 
-            SnapOwnerToSlot();
-
-            // server
-            OnRep_Slot();
-            OnRep_StanceExposure();
-            OnRep_Peek();
-            
-            return true;
-        }
-    }
-    else
-    {
-        if (Peek == EPeekDirection::None)
-        {
-            Server_RequestSlotMoveRelative(Delta);
-        }
-        return true;
-    }
-    
-    return false;
+    SnapOwnerToCoverAlpha();
+    OnRep_CoverAlpha();
+    OnRep_StanceExposure();
+    OnRep_Peek();
+    return true;
+  }
+  else
+  {
+    Server_SlideAlongCover(DeltaAlpha);
+    return true;
+  }
 }
 
 bool UBunkerCoverComponent::SetStance(ECoverStance NewStance)
 {
-    if (!IsInCover()) return false;
-    if (!IsStanceAllowedAtSlot(NewStance, CurrentSlotIndex)) return false;
+  if (!IsInCover()) return false;
+  if (!IsStanceAllowedAtAlpha(NewStance, CoverAlpha)) return false;
 
-    if (GetOwner()->HasAuthority())
-    {
-        Stance = NewStance;
-        OnRep_StanceExposure();
-        return true;
-    }
-    else
-    {
-        Server_SetStance(NewStance);
-        return true;
-    }
+  if (GetOwner()->HasAuthority())
+  {
+    Stance = NewStance;
+    OnRep_StanceExposure();
+    return true;
+  }
+  else
+  {
+    Server_SetStance(NewStance);
+    return true;
+  }
 }
 
 bool UBunkerCoverComponent::SetPeek(EPeekDirection Direction, bool bEnable)
 {
-    if (!IsInCover()) return false;
-    if (!IsPeekAllowedAtSlot(Direction, CurrentSlotIndex)) return false;
+  if (!IsInCover()) return false;
 
-    DEBUG(5.0f, FColor::Blue, TEXT("UBunkerCoverComponent::SetPeek: %s"), *StaticEnum<EPeekDirection>()->GetNameStringByValue(static_cast<int64>(Direction)));
+  float MaxDepth = 0.f;
+  if (bEnable && !IsPeekAllowedAtAlpha(Direction, CoverAlpha, MaxDepth)) return false;
 
-    if (GetOwner()->HasAuthority())
-    {
-        Peek = bEnable ? Direction : EPeekDirection::None;
-        Exposure = bEnable ? EExposureState::Peeking : EExposureState::Hidden;
-        
-        OnRep_Peek();
-        OnRep_StanceExposure();
-        return true;
-    }
-    else
-    {
-        Server_SetPeek(Direction, bEnable);
-        return true;
-    }
+  if (GetOwner()->HasAuthority())
+  {
+    Peek     = bEnable ? Direction : EPeekDirection::None;
+    Exposure = bEnable ? EExposureState::Peeking : EExposureState::Hidden;
+
+    OnRep_Peek();
+    OnRep_StanceExposure();
+    return true;
+  }
+  else
+  {
+    Server_SetPeek(Direction, bEnable);
+    return true;
+  }
 }
 
 bool UBunkerCoverComponent::SetExposureState(EExposureState NewExposure)
 {
-    if (!IsInCover()) return false;
+  if (!IsInCover()) return false;
 
-    if (GetOwner()->HasAuthority())
-    {
-        Exposure = NewExposure;
-        if (Exposure == EExposureState::Hidden) { Peek = EPeekDirection::None; }
-        OnRep_StanceExposure();
-        return true;
-    }
-    else
-    {
-        Server_SetExposure(NewExposure);
-        return true;
-    }
+  if (GetOwner()->HasAuthority())
+  {
+    Exposure = NewExposure;
+    if (Exposure == EExposureState::Hidden) { Peek = EPeekDirection::None; }
+    OnRep_StanceExposure();
+    return true;
+  }
+  else
+  {
+    Server_SetExposure(NewExposure);
+    return true;
+  }
 }
 
-void UBunkerCoverComponent::SnapOwnerToSlot()
+// ----- Helpers -----
+
+void UBunkerCoverComponent::SnapOwnerToCoverAlpha()
 {
-    if (!OwnerCharacter.IsValid() || !CurrentBunker) return;
-    const FTransform WT = CurrentBunker->GetSlotWorldTransform(CurrentSlotIndex);
+  if (!OwnerCharacter.IsValid() || !CurrentBunker) return;
+  UCoverSplineComponent* S = CurrentBunker->GetCoverSpline();
+  if (!S) return;
 
-    FRotator NewRot = WT.GetRotation().Rotator();
-    NewRot.Pitch = 0.f; NewRot.Roll = 0.f;
-
-    OwnerCharacter->SetActorLocation(WT.GetLocation());
-    OwnerCharacter->SetActorRotation(NewRot);
-    
-    // TODO: notify anim system via tags / montage
+  const FTransform WT = S->GetWorldTransformAtAlpha(CoverAlpha);
+  FRotator YawOnly = WT.Rotator(); YawOnly.Pitch = 0.f; YawOnly.Roll = 0.f;
+  OwnerCharacter->SetActorLocation(WT.GetLocation());
+  OwnerCharacter->SetActorRotation(YawOnly);
 }
 
-void UBunkerCoverComponent::OnRep_Bunker() { }
-void UBunkerCoverComponent::OnRep_Slot()
+bool UBunkerCoverComponent::IsStanceAllowedAtAlpha(ECoverStance InStance, float Alpha) const
 {
-    OnSlotChanged.Broadcast(CurrentSlotIndex);
-    DEBUG(5.0f, FColor::Magenta, TEXT("Broadcasting -> OnSlotChanged: [%i]"), CurrentSlotIndex);
+  if (!CurrentBunker) return false;
+  if (UCoverSplineComponent* S = CurrentBunker->GetCoverSpline())
+  {
+    return (S->RequiredStanceAtAlpha(Alpha) == InStance);
+  }
+  return true;
 }
+
+bool UBunkerCoverComponent::IsPeekAllowedAtAlpha(EPeekDirection InPeek, float Alpha, float& OutMaxDepthCm) const
+{
+  OutMaxDepthCm = 0.f;
+  if (InPeek == EPeekDirection::None) return true;
+  if (!CurrentBunker) return false;
+  if (UCoverSplineComponent* S = CurrentBunker->GetCoverSpline())
+  {
+    return S->IsPeekAllowedAtAlpha(Alpha, InPeek, OutMaxDepthCm);
+  }
+  return false;
+}
+
+// ----- RepNotifies -----
+
+void UBunkerCoverComponent::OnRep_Bunker()
+{
+  // no-op; animation/gameplay systems can listen to other notifies
+}
+
+void UBunkerCoverComponent::OnRep_CoverAlpha()
+{
+  OnCoverAlphaChanged.Broadcast(CoverAlpha);
+  SnapOwnerToCoverAlpha();
+}
+
 void UBunkerCoverComponent::OnRep_StanceExposure()
 {
-    OnStanceChanged.Broadcast(Stance, Exposure);
-
-    // ------------ Debug -------------
-    const FString StanceName   = StaticEnum<ECoverStance>()
-        ? StaticEnum<ECoverStance>()->GetDisplayNameTextByValue(static_cast<int64>(Stance)).ToString()
-        : TEXT("Invalid");
-    const FString ExposureName = StaticEnum<EExposureState>()
-        ? StaticEnum<EExposureState>()->GetDisplayNameTextByValue(static_cast<int64>(Exposure)).ToString()
-        : TEXT("Invalid");
-
-    DEBUG(5.0f, FColor::Cyan, TEXT("[Cover] %s Stance=%s Exposure=%s"),
-        *GetNameSafe(GetOwner()), *StanceName, *ExposureName);
-    // ---------- End Debug -----------
+  OnStanceChanged.Broadcast(Stance, Exposure);
 }
 
 void UBunkerCoverComponent::OnRep_Peek()
 {
-    OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
+  OnPeekChanged.Broadcast(Peek, Peek != EPeekDirection::None);
 
-    // Designer debug: draw slot→peek guide only (keep this)
-    if (CurrentBunker)
-    {
-        const FCoverSlot& Slot = CurrentBunker->GetSlot(CurrentSlotIndex);
-        FVector LocalOffset = FVector::ZeroVector;
-        if (Peek == EPeekDirection::Left)  LocalOffset.Y = -Slot.LateralPeekOffset;
-        if (Peek == EPeekDirection::Right) LocalOffset.Y =  Slot.LateralPeekOffset;
-        if (Peek == EPeekDirection::Over)  LocalOffset.Z =  Slot.VerticalPeekOffset;
-
-        const FTransform SlotWT = CurrentBunker->GetSlotWorldTransform(CurrentSlotIndex);
-        const FVector PeekPointWS = SlotWT.TransformPosition(LocalOffset);
-        const FVector SlotWS      = SlotWT.GetLocation();
-        DrawDebugLine(GetWorld(), SlotWS, PeekPointWS, FColor::Red, false, 5.f, 0, 2.f);
-        DrawDebugSphere(GetWorld(), PeekPointWS, 5.f, 12, FColor::Green, false, 5.f);
-    }
+  // Debug visualize peek outward axis (optional)
+  if (CurrentBunker && CurrentBunker->GetCoverSpline())
+  {
+    const FTransform WT = CurrentBunker->GetCoverSpline()->GetWorldTransformAtAlpha(CoverAlpha);
+    const FVector P = WT.GetLocation();
+    const FVector Out = CurrentBunker->GetCoverSpline()->GetOutwardAtAlpha(CoverAlpha);
+    const float Sign = (Peek == EPeekDirection::Left) ? -1.f : (Peek == EPeekDirection::Right ? +1.f : 0.f);
+    DrawDebugLine(GetWorld(), P, P + Out * (Sign * 40.f), FColor::Red, false, 2.f, 0, 2.f);
+  }
 }
 
-// === RPC impls ===
-void UBunkerCoverComponent::Server_TryEnterCover_Implementation(ABunkerBase* Bunker, int32 SlotIndex){ TryEnterCover(Bunker, SlotIndex); }
-void UBunkerCoverComponent::Server_ExitCover_Implementation(){ ExitCover(); }
-void UBunkerCoverComponent::Server_RequestSlotMoveRelative_Implementation(int32 Delta){ RequestSlotMoveRelative(Delta); }
-void UBunkerCoverComponent::Server_SetStance_Implementation(ECoverStance NewStance){ SetStance(NewStance); }
-void UBunkerCoverComponent::Server_SetPeek_Implementation(EPeekDirection Direction, bool bEnable){ SetPeek(Direction, bEnable); }
-void UBunkerCoverComponent::Server_SetExposure_Implementation(EExposureState NewExposure){ SetExposureState(NewExposure); }
+// ----- RPC impls -----
+
+void UBunkerCoverComponent::Server_EnterCoverAtAlpha_Implementation(ABunkerBase* Bunker, float Alpha)
+{
+  EnterCoverAtAlpha(Bunker, Alpha);
+}
+
+void UBunkerCoverComponent::Server_ExitCover_Implementation()
+{
+  ExitCover();
+}
+
+void UBunkerCoverComponent::Server_SlideAlongCover_Implementation(float DeltaAlpha)
+{
+  SlideAlongCover(DeltaAlpha);
+}
+
+void UBunkerCoverComponent::Server_SetStance_Implementation(ECoverStance NewStance)
+{
+  SetStance(NewStance);
+}
+
+void UBunkerCoverComponent::Server_SetPeek_Implementation(EPeekDirection Direction, bool bEnable)
+{
+  SetPeek(Direction, bEnable);
+}
+
+void UBunkerCoverComponent::Server_SetExposure_Implementation(EExposureState NewExposure)
+{
+  SetExposureState(NewExposure);
+}

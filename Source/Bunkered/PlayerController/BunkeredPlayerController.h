@@ -11,9 +11,7 @@ class UEnhancedInputComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
 
-/**
- * Centralizes input. Forwards to the possessed pawn via BunkerCoverInterface.
- */
+/** Centralizes input. Forwards to the possessed pawn via BunkerCoverInterface. */
 UCLASS()
 class BUNKERED_API ABunkeredPlayerController : public APlayerController
 {
@@ -31,31 +29,20 @@ protected:
     TArray<UInputMappingContext*> DefaultMappingContexts;
 
     // Axis actions
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* MoveAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* MoveAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* LookAction = nullptr;
 
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* LookAction = nullptr;
-
-    // Cover actions
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* EnterSlotOnBunkerAction = nullptr;
-    
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* ChangeStanceAction = nullptr;
-    
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* PeekLeftAction = nullptr;
-    
-    UPROPERTY(EditDefaultsOnly, Category="Input")
-    UInputAction* PeekRightAction = nullptr;
+    // Cover actions (keep names so you don't have to rebind assets)
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* EnterSplineOnBunkerAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* ChangeStanceAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* PeekLeftAction = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="Input") UInputAction* PeekRightAction = nullptr;
 
 private:
-    // Helpers to dispatch to the interface
     void OnMove(const FInputActionValue& Value);
     void OnLook(const FInputActionValue& Value);
 
-    void OnEnterSlotOnBunker();
+    void OnEnterCoverAction();
     void OnStanceChange();
 
     // Peeking
