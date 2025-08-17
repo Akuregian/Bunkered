@@ -107,6 +107,7 @@ void ABunkeredCharacter::Cover_Peek_Implementation(EPeekDirection Direction, boo
 {
     if (PeekComponent)
     {
+        DEBUG(5.0f, FColor::Green, TEXT("Handling Cover Peek: %s"), *StaticEnum<EPeekDirection>()->GetNameStringByValue((int64)Direction));
         PeekComponent->HandlePeekInput(Direction, bPressed);
         return;
     }

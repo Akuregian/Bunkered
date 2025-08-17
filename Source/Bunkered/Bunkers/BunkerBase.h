@@ -46,6 +46,10 @@ protected:
     UPROPERTY(EditAnywhere, Category="Cover|Defaults")
     bool bAutoInitSplinePoints = true;
 
+    /* Enable auto sync for spline points to update in world */
+    UPROPERTY(EditInstanceOnly, Category="Cover|Defaults")
+    bool bOverrideSplineInInstance = false;
+
 #if WITH_EDITOR
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;

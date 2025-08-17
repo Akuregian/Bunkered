@@ -61,4 +61,10 @@ public:
   // Refresh spline components when moved/updated
   virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
   virtual void PostEditComponentMove(bool bFinished) override;
+
+
+  // Test
+#if WITH_EDITOR
+  void CopyFrom(const USplineComponent* Src);
+#endif
 };

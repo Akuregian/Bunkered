@@ -101,17 +101,24 @@ void ABunkeredPlayerController::OnStanceChange()
 
 void ABunkeredPlayerController::OnPeekLeftStart()
 {
-    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Left,  true);
+    if (UObject* P = GetPawnObject())
+        IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Left, true);
 }
+
 void ABunkeredPlayerController::OnPeekLeftStop()
 {
-    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Left,  false);
+    if (UObject* P = GetPawnObject())
+        IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Left, false);
 }
+
 void ABunkeredPlayerController::OnPeekRightStart()
 {
-    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Right, true);
+    if (UObject* P = GetPawnObject())
+        IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Right, true);
 }
+
 void ABunkeredPlayerController::OnPeekRightStop()
 {
-    if (UObject* P=GetPawnObject()) IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Right, false);
+    if (UObject* P = GetPawnObject())
+        IBunkerCoverInterface::Execute_Cover_Peek(P, EPeekDirection::Right, false);
 }

@@ -79,4 +79,31 @@ void UCoverSplineComponent::PostEditComponentMove(bool bFinished)
   UpdateSpline();
 }
 
+void UCoverSplineComponent::CopyFrom(const USplineComponent* Src)
+{
+  if (!Src || Src == this) return;
+  ClearSplinePoints(false);
+  const int32 Num = Src->GetNumberOfSplinePoints();
+  for (int32 i = 0; i < Num; ++i)
+  {
+    const FVector  P   = Src->GetLocationAtSplinePoint(i, ESplineCoordinateSpace::Local);
+    const FRotator R   = Src->GetRotationAtSplinePoint(i, ESplineCoordinateSpace::Local);
+    const FVector  S   = Src->GetScaleAtSplinePoint(i);
+    const auto     Typ = Src->GetSplinePointType(i);
+    const FVector  Arr = Src->GetArriveTangentAtSplinePoint(i, ESplineCoordinateSpace::Local);
+    const FVector  Lev = Src->GetLeaveTangentAtSplinePoint(i,  ESplineCoordinateSpace::Local);
+
+    AddSplinePoint(P, ESplineCoordinateSpace::Local, false);
+    SetRotationAtSplinePoint(i, R, ESplineCoordinateSpace::Local, false);
+    SetScaleAtSplinePoint(i, S, false);
+    SetSplinePointType(i, Typ, false);
+    SetTangentsAtSplinePoint(i, Arr, Lev, ESplineCoordinateSpace::Local, false);
+    
+    // Optional if you care about custom up-vectors:
+    // SetUpVectorAtSplinePoint(i, Src->GetUpVectorAtSplinePoint(i, ESplineCoordinateSpace::Local), ESplineCoordinateSpace::Local, false);
+  }
+  SetClosedLoop(Src->IsClosedLoop(), false);
+  UpdateSpline();
+}
+
 #endif

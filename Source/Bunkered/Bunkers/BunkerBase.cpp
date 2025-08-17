@@ -30,6 +30,14 @@ void ABunkerBase::OnConstruction(const FTransform& Transform)
     InitializeCoverSplineDefaults();
   }
 
+  if (CoverSpline && !bOverrideSplineInInstance)
+  {
+    if (UCoverSplineComponent* TemplateSpline = Cast<UCoverSplineComponent>(CoverSpline->GetArchetype()))
+    {
+      CoverSpline->CopyFrom(TemplateSpline);
+    }
+  }
+
   if (CoverSpline && CoverSpline->GetNumberOfSplinePoints() == 1)
   {
     const FVector Center = GetActorLocation();
