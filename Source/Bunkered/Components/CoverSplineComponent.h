@@ -37,8 +37,8 @@ public:
   UPROPERTY(EditAnywhere, Category="Cover|Orientation") bool bOutwardIsLeft = true;
 
   // Authoring
-  UPROPERTY(EditAnywhere, Category="Cover|Authoring") TArray<FPeekRegion>   PeekRegions;
-  UPROPERTY(EditAnywhere, Category="Cover|Authoring") TArray<FStanceRegion> StanceRegions;
+  UPROPERTY(EditAnywhere, Category="Cover|Regions") TArray<FPeekRegion>   PeekRegions;
+  UPROPERTY(EditAnywhere, Category="Cover|Regions") TArray<FStanceRegion> StanceRegions;
 
   // ---- T-based (internal) ----
   UFUNCTION(BlueprintCallable, Category="Cover|Spline") float     FindClosestT(const FVector& World) const;
@@ -62,8 +62,23 @@ public:
   virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
   virtual void PostEditComponentMove(bool bFinished) override;
 
+  // ------ Debug (editor/runtime) ----
+  UPROPERTY(EditAnywhere, Category="Cover|Debug")
+  bool bDebugDrawPeekRegions = true;
 
-  // Test
+  UPROPERTY(EditAnywhere, Category="Cover|Debug", meta=(ClampMin="0.001", ClampMax="0.25"))
+  float DebugDrawStep = 0.02f; // ~50 ticks per spline
+
+  UPROPERTY(EditAnywhere, Category="Cover|Debug")
+  float DebugDrawHeight = 8.f; // lift lines off the ground a bit
+
+  UPROPERTY(EditAnywhere, Category="Cover|Debug")
+  float DebugDrawDuration = 0.15f; // seconds
+
+  UFUNCTION(BlueprintCallable, Category="Cover|Debug")
+  void DebugDrawPeekRegions() const;
+  // Debug End -----------------------
+
 #if WITH_EDITOR
   void CopyFrom(const USplineComponent* Src);
 #endif

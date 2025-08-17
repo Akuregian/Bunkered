@@ -46,9 +46,9 @@ void ABunkeredPlayerController::SetupInputComponent()
 
         // Peeking
         if (PeekLeftAction)  { EIC->BindAction(PeekLeftAction,  ETriggerEvent::Started,   this, &ABunkeredPlayerController::OnPeekLeftStart);
-                               EIC->BindAction(PeekLeftAction,  ETriggerEvent::Completed, this, &ABunkeredPlayerController::OnPeekLeftStop); }
+                               EIC->BindAction(PeekLeftAction,  ETriggerEvent::Canceled, this, &ABunkeredPlayerController::OnPeekLeftStop); }
         if (PeekRightAction) { EIC->BindAction(PeekRightAction, ETriggerEvent::Started,   this, &ABunkeredPlayerController::OnPeekRightStart);
-                               EIC->BindAction(PeekRightAction, ETriggerEvent::Completed, this, &ABunkeredPlayerController::OnPeekRightStop); }
+                               EIC->BindAction(PeekRightAction, ETriggerEvent::Canceled, this, &ABunkeredPlayerController::OnPeekRightStop); }
     }
 }
 

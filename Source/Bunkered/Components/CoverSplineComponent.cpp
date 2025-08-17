@@ -1,5 +1,6 @@
 // Components/CoverSplineComponent.cpp
 #include "Components/CoverSplineComponent.h"
+#include "DrawDebugHelpers.h"
 
 static float ToNormalizedT(const USplineComponent* S, float InputKey)
 {
@@ -77,6 +78,45 @@ void UCoverSplineComponent::PostEditComponentMove(bool bFinished)
 {
   Super::PostEditComponentMove(bFinished);
   UpdateSpline();
+}
+
+void UCoverSplineComponent::DebugDrawPeekRegions() const
+{
+
+  if (!bDebugDrawPeekRegions) return;
+
+  auto DirColor = [](EPeekDirection Dir)->FColor {
+    return (Dir == EPeekDirection::Left)  ? FColor::Red  :
+           (Dir == EPeekDirection::Right) ? FColor::Blue :
+                                            FColor::Silver;
+  };
+
+  for (const FPeekRegion& R : PeekRegions)
+  {
+    const FColor C = DirColor(R.Allowed);
+    const float  T0 = ClampT(R.TMin);
+    const float  T1 = ClampT(R.TMax);
+    const float  Step = FMath::Clamp(DebugDrawStep, 0.001f, 0.25f);
+
+    for (float t = T0; t <= T1; t += Step)
+    {
+      const FVector P   = GetWorldTransformAtT(t).GetLocation() + FVector(0,0,DebugDrawHeight);
+      const FVector Out = GetOutwardAtT(t);
+
+      // Small hash mark pointing outward, scaled a bit by MaxDepth for visibility
+      const float   Mark = FMath::Max(10.f, R.MaxDepthCm * 0.3f);
+      DrawDebugLine(GetWorld(), P, P + Out * Mark, C, false, DebugDrawDuration, 0, 3.f);
+    }
+
+    // Label the region in the middle
+    const float   MidT = 0.5f * (T0 + T1);
+    const FVector MidP = GetWorldTransformAtT(MidT).GetLocation() + FVector(0,0,DebugDrawHeight + 6.f);
+    DrawDebugString(GetWorld(), MidP,
+                    FString::Printf(TEXT("%s  [%.2f..%.2f]  Max%.0fcm"),
+                        (R.Allowed==EPeekDirection::Left?TEXT("Left"):TEXT("Right")),
+                        T0, T1, R.MaxDepthCm),
+                    nullptr, C, DebugDrawDuration, false);
+  }
 }
 
 void UCoverSplineComponent::CopyFrom(const USplineComponent* Src)

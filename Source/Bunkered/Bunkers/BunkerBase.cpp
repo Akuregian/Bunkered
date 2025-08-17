@@ -55,6 +55,12 @@ void ABunkerBase::OnConstruction(const FTransform& Transform)
     CoverSpline->SetLocationAtSplinePoint(0, Outer, ESplineCoordinateSpace::World, false);
     CoverSpline->UpdateSpline();
   }
+
+  // Debug to draw Peek Regions along the current spline
+  if (CoverSpline && CoverSpline->bDebugDrawPeekRegions)
+  {
+    CoverSpline->DebugDrawPeekRegions();
+  }
 }
 
 EDataValidationResult ABunkerBase::IsDataValid(FDataValidationContext& Context) const
